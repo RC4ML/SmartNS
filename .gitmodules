@@ -1,0 +1,9 @@
+[submodule "third_party/atomic_queue"]
+	path = third_party/atomic_queue
+	url = https://github.com/max0x7ba/atomic_queue.git
+[submodule "third_party/HdrHistogram_c"]
+	path = third_party/HdrHistogram_c
+	url = https://github.com/HdrHistogram/HdrHistogram_c.git
+[submodule "third_party/rdma-core"]
+	path = third_party/rdma-core
+	url = https://github.com/cxz66666/rdma-core
