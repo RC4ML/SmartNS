@@ -66,10 +66,10 @@ add_definitions(-DDOCA_ALLOW_EXPERIMENTAL_API)
 
 
 #include 
-include_directories("${CMAKE_SOURCE_DIR}/include")
+include_directories(${CMAKE_SOURCE_DIR}/include)
 
 #include: utils
-include_directories("${CMAKE_SOURCE_DIR}/utils")
+include_directories(${CMAKE_SOURCE_DIR}/utils)
 
 #sub-project: HdrHistogram
 include_directories(${CMAKE_SOURCE_DIR}/HdrHistogram_c/include)
@@ -77,8 +77,13 @@ include_directories(${CMAKE_SOURCE_DIR}/HdrHistogram_c/include)
 # Common sub-projects: atomic_queue
 include_directories(${CMAKE_SOURCE_DIR}/third_party/atomic_queue/include)
 
+# Common sub-projects: parallel_hashmap
+include_directories(${CMAKE_SOURCE_DIR}/third_party/parallel_hashmap/parallel_hashmap)
 
-set(LIBRARIES ${LIBRARIES} ibverbs pthread numa gflags hdr_histogram_static mlx5)
 
 option(HDR_HISTOGRAM_BUILD_PROGRAMS OFF)
 add_subdirectory(${CMAKE_SOURCE_DIR}/HdrHistogram_c)
+
+add_subdirectory(${CMAKE_SOURCE_DIR}/minipcm)
+
+set(LIBRARIES ${LIBRARIES} ibverbs pthread numa gflags hdr_histogram_static minipcm_static mlx5)

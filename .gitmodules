@@ -7,3 +7,6 @@
 [submodule "third_party/rdma-core"]
 	path = third_party/rdma-core
 	url = https://github.com/cxz66666/rdma-core
+[submodule "third_party/parallel-hashmap"]
+	path = third_party/parallel-hashmap
+	url = https://github.com/greg7mdp/parallel-hashmap.git

@@ -1,8 +1,6 @@
 #include "numautil.h"
 #include "common.hpp"
 
-
-
 namespace SmartNS {
     size_t num_lcores_per_numa_node() {
         return static_cast<size_t>(numa_num_configured_cpus() /
@@ -31,8 +29,8 @@ namespace SmartNS {
 
         const std::vector<size_t> lcore_vec = get_lcores_for_numa_node(numa_node);
         if (numa_local_index >= lcore_vec.size()) {
-            DOCA_LOG_ERR(
-                "eRPC: Requested binding to core %zu (zero-indexed) on NUMA node %zu, "
+            SMARTNS_ERROR(
+                "Requested binding to core %zu (zero-indexed) on NUMA node %zu, "
                 "which has only %zu cores. Ignoring, but this can cause very low "
                 "performance.\n",
                 numa_local_index, numa_node, lcore_vec.size());
@@ -46,6 +44,18 @@ namespace SmartNS {
             &cpuset);
         rt_assert(rc == 0, "Error setting thread affinity");
     }
+
+    void wait_scheduling(size_t numa_node, size_t numa_local_index) {
+        const std::vector<size_t> lcore_vec = get_lcores_for_numa_node(numa_node);
+
+        const size_t global_index = lcore_vec.at(numa_local_index);
+
+        while (global_index != sched_getcpu()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));//wait set affinity success
+        }
+        SMARTNS_INFO("Thread [%2d] has been moved to core [%2d]", global_index, sched_getcpu());
+    }
+
 
     int get_2M_huagepages_free(size_t numa_node) {
         rt_assert(numa_node < static_cast<size_t>(numa_num_configured_nodes()), "numa node illegal");
@@ -102,24 +112,24 @@ namespace SmartNS {
             if (shm_id == -1) {
                 switch (errno) {
                 case EEXIST:
-                    DOCA_LOG_INFO("shm_key already exists. Try again.");
+                    SMARTNS_INFO("shm_key already exists. Try again.");
                     continue; // shm_key already exists. Try again.
 
                 case EACCES:
-                    DOCA_LOG_ERR("Invalid access, maybe code is not illegal");
+                    SMARTNS_INFO("Invalid access, maybe code is not illegal");
                     exit(-1);
 
                 case EINVAL:
-                    DOCA_LOG_ERR("Invalid argument, maybe code is not illegal");
+                    SMARTNS_INFO("Invalid argument, maybe code is not illegal");
                     exit(-1);
                 case ENOMEM:
                     // Out of memory
-                    DOCA_LOG_ERR(
+                    SMARTNS_INFO(
                         "No enough memory could be allocated, please insure you have enough 2M hugepage on this NUMA\n");
                     exit(-1);
 
                 default:
-                    DOCA_LOG_ERR("Unexpect error \n");
+                    SMARTNS_INFO("Unexpect error \n");
                     exit(-1);
                 }
             } else {
@@ -137,7 +147,7 @@ namespace SmartNS {
         long ret = mbind(shm_buf, size, MPOL_BIND, &nodemask, 32, 0);
 
         if (ret) {
-            DOCA_LOG_ERR("mbind error %ld", ret);
+            SMARTNS_INFO("mbind error %ld", ret);
             exit(-1);
         }
 

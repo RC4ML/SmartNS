@@ -7,6 +7,8 @@
 #include <assert.h>
 #include <sys/types.h>
 
+#include "log.h"
+
 #define CACHE_LINE_SZ 64
 
 #if defined(__x86_64__)

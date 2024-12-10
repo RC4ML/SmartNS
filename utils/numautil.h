@@ -19,6 +19,9 @@ namespace SmartNS {
     void bind_to_core(std::thread &thread, size_t numa_node,
         size_t numa_local_index);
 
+    /// Wait until the thread is scheduled on the core with index numa_local_index
+    void wait_scheduling(size_t numa_node, size_t numa_local_index);
+
     int get_2M_huagepages_free(size_t numa_node);
 
     int get_2M_huagepages_nr(size_t numa_node);
