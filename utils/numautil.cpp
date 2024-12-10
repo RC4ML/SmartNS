@@ -7,13 +7,13 @@ namespace SmartNS {
             numa_num_configured_nodes());
     }
 
-    std::vector<size_t> get_lcores_for_numa_node(size_t numa_node) {
+    std::vector<int> get_lcores_for_numa_node(size_t numa_node) {
         rt_assert(numa_node <= static_cast<size_t>(numa_max_node()));
 
-        std::vector<size_t> ret;
-        auto num_lcores = static_cast<size_t>(numa_num_configured_cpus());
+        std::vector<int> ret;
+        int num_lcores = numa_num_configured_cpus();
 
-        for (size_t i = 0; i < num_lcores; i++) {
+        for (int i = 0; i < num_lcores; i++) {
             if (numa_node == static_cast<size_t>(numa_node_of_cpu(static_cast<int>(i)))) {
                 ret.push_back(i);
             }
@@ -27,7 +27,7 @@ namespace SmartNS {
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
 
-        const std::vector<size_t> lcore_vec = get_lcores_for_numa_node(numa_node);
+        const std::vector<int> lcore_vec = get_lcores_for_numa_node(numa_node);
         if (numa_local_index >= lcore_vec.size()) {
             SMARTNS_ERROR(
                 "Requested binding to core %zu (zero-indexed) on NUMA node %zu, "
@@ -37,7 +37,7 @@ namespace SmartNS {
             return;
         }
 
-        const size_t global_index = lcore_vec.at(numa_local_index);
+        const int global_index = lcore_vec.at(numa_local_index);
 
         CPU_SET(global_index, &cpuset);
         int rc = pthread_setaffinity_np(thread.native_handle(), sizeof(cpu_set_t),
@@ -46,9 +46,9 @@ namespace SmartNS {
     }
 
     void wait_scheduling(size_t numa_node, size_t numa_local_index) {
-        const std::vector<size_t> lcore_vec = get_lcores_for_numa_node(numa_node);
+        const std::vector<int> lcore_vec = get_lcores_for_numa_node(numa_node);
 
-        const size_t global_index = lcore_vec.at(numa_local_index);
+        const int global_index = lcore_vec.at(numa_local_index);
 
         while (global_index != sched_getcpu()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));//wait set affinity success

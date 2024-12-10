@@ -12,7 +12,7 @@ namespace SmartNS {
     size_t num_lcores_per_numa_node();
 
     /// Return a list of logical cores in \p numa_node
-    std::vector<size_t> get_lcores_for_numa_node(size_t numa_node);
+    std::vector<int> get_lcores_for_numa_node(size_t numa_node);
 
     /// Bind this thread to the core with index numa_local_index on the socket =
     /// numa_node

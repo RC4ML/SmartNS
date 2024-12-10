@@ -60,7 +60,7 @@ else()
 endif ()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -std=c++20 -Wall")
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-function -Wno-nested-anon-types -Wno-keyword-macro -Wno-deprecated-declarations -Wno-address-of-packed-member")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-function")
 
 add_definitions(-DDOCA_ALLOW_EXPERIMENTAL_API)
 
@@ -82,8 +82,29 @@ include_directories(${CMAKE_SOURCE_DIR}/third_party/parallel_hashmap/parallel_ha
 
 
 option(HDR_HISTOGRAM_BUILD_PROGRAMS OFF)
-add_subdirectory(${CMAKE_SOURCE_DIR}/HdrHistogram_c)
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/HdrHistogram_c)
 
-add_subdirectory(${CMAKE_SOURCE_DIR}/minipcm)
+add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/minipcm)
 
-set(LIBRARIES ${LIBRARIES} ibverbs pthread numa gflags hdr_histogram_static minipcm_static mlx5)
+
+set(UTILSOURCES
+    ${CMAKE_SOURCE_DIR}/utils/gflags_common.cpp
+    ${CMAKE_SOURCE_DIR}/utils/hdr_histogram.cpp
+    ${CMAKE_SOURCE_DIR}/utils/numautil.cpp
+)
+
+set(DEVXSOURCES 
+    ${CMAKE_SOURCE_DIR}/src/devx/devx_device.cpp
+    ${CMAKE_SOURCE_DIR}/src/devx/devx_mr.cpp
+)
+
+set(DPUSOURCES
+    ${CMAKE_SOURCE_DIR}/src/dpu/smartns.cpp
+)
+
+set(LIBRARIES ${LIBRARIES} mlx5 ibverbs pthread numa gflags hdr_histogram_static minipcm_static)
+
+
+add_executable(smartns ${UTILSOURCES} ${DEVXSOURCES} ${DPUSOURCES})
+
+target_link_libraries(smartns ${LIBRARIES})

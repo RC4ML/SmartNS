@@ -6,6 +6,8 @@
 #include <execinfo.h>
 #include <assert.h>
 #include <sys/types.h>
+#include <infiniband/verbs.h>
+#include <infiniband/mlx5dv.h>
 
 #include "log.h"
 
@@ -73,13 +75,15 @@ static size_t get_tsc() {
 
 #define Assert(condition) SmartNS::rt_assert(condition, __FILE__, __LINE__);
 
+static size_t round_up(size_t num, size_t factor) {
+    return num + factor - 1 - ((num + factor - 1) % factor);
+}
+
 namespace SmartNS {
 
 #pragma GCC diagnostic ignored "-Wunused-function"
 
-    static size_t round_up(size_t num, size_t factor) {
-        return num + factor - 1 - (num + factor - 1) % factor;
-    }
+
 
     static void print_bt() {
         void *array[10];

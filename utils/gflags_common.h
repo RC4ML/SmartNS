@@ -4,7 +4,7 @@
 
 DECLARE_string(deviceName);
 
-DECLARE_int32(gidIndex);
+DECLARE_uint64(gidIndex);
 
 DECLARE_uint64(batch_size);
 

@@ -1,11 +1,9 @@
 #pragma once
 
-#include <chrono>
 #include <string>
+#include <chrono>
 
-namespace SmartNS {
-
-    // Log levels: higher means more verbose
+// Log levels: higher means more verbose
 #define SMARTNS_LOG_LEVEL_OFF 0
 #define SMARTNS_LOG_LEVEL_ERROR 1   // Only fatal conditions
 #define SMARTNS_LOG_LEVEL_WARN 2    // Conditions from which it's possible to recover
@@ -29,12 +27,70 @@ namespace SmartNS {
 #define SMARTNS_LOG_LEVEL SMARTNS_LOG_LEVEL_CC
 #endif
 
+namespace SmartNS {
+    /// Return decent-precision time formatted as seconds:microseconds
+    static std::string get_formatted_time() {
+        const auto now = std::chrono::high_resolution_clock::now();
+
+        const size_t sec = static_cast<size_t>(
+            std::chrono::time_point_cast<std::chrono::seconds>(now)
+            .time_since_epoch()
+            .count());
+
+        const size_t usec = static_cast<size_t>(
+            std::chrono::time_point_cast<std::chrono::microseconds>(now)
+            .time_since_epoch()
+            .count());
+
+        // Roll-over seconds every 100 seconds
+        char buf[20];
+        sprintf(buf, "%zu:%06zu", sec % 100,
+            (usec - (sec * 1000000)) /* spare microseconds */);
+        return std::string(buf);
+    }
+    // Output log message header
+    static void output_log_header(FILE *stream, int level) {
+        std::string formatted_time = get_formatted_time();
+
+        const char *type;
+        switch (level) {
+        case SMARTNS_LOG_LEVEL_ERROR:
+            type = "ERROR";
+            break;
+        case SMARTNS_LOG_LEVEL_WARN:
+            type = "WARNG";
+            break;
+        case SMARTNS_LOG_LEVEL_INFO:
+            type = "INFOR";
+            break;
+        case SMARTNS_LOG_LEVEL_REORDER:
+            type = "REORD";
+            break;
+        case SMARTNS_LOG_LEVEL_TRACE:
+            type = "TRACE";
+            break;
+        case SMARTNS_LOG_LEVEL_CC:
+            type = "CONGC";
+            break;
+        default:
+            type = "UNKWN";
+        }
+
+        fprintf(stream, "%s %s: ", formatted_time.c_str(), type);
+    }
+
+    /// Return true iff REORDER/TRACE/CC mode logging is disabled. These modes can
+    /// print an unreasonable number of log messages.
+    static bool is_log_level_reasonable() {
+        return SMARTNS_LOG_LEVEL <= SMARTNS_LOG_LEVEL_INFO;
+    }
+
 #if SMARTNS_LOG_LEVEL >= SMARTNS_LOG_LEVEL_ERROR
 #define SMARTNS_ERROR(...)                                    \
     SmartNS::output_log_header(stderr, SMARTNS_LOG_LEVEL_ERROR); \
-    fprintf(SMARTNS_LOG_DEFAULT_STREAM, __VA_ARGS__);         \
-    fprintf(SMARTNS_LOG_DEFAULT_STREAM, "\n");                \
-    fflush(SMARTNS_LOG_DEFAULT_STREAM)
+    fprintf(stderr, __VA_ARGS__);         \
+    fprintf(stderr, "\n");                \
+    fflush(stderr)
 #else
 #define SMARTNS_ERROR(...) ((void)0)
 #endif
@@ -91,63 +147,5 @@ namespace SmartNS {
 #else
 #define SMARTNS_CC(...) ((void)0)
 #endif
-
-    /// Return decent-precision time formatted as seconds:microseconds
-    static std::string get_formatted_time() {
-        const auto now = std::chrono::high_resolution_clock::now();
-
-        const size_t sec = static_cast<size_t>(
-            std::chrono::time_point_cast<std::chrono::seconds>(now)
-            .time_since_epoch()
-            .count());
-
-        const size_t usec = static_cast<size_t>(
-            std::chrono::time_point_cast<std::chrono::microseconds>(now)
-            .time_since_epoch()
-            .count());
-
-        // Roll-over seconds every 100 seconds
-        char buf[20];
-        sprintf(buf, "%zu:%06zu", sec % 100,
-            (usec - (sec * 1000000)) /* spare microseconds */);
-        return std::string(buf);
-    }
-
-    // Output log message header
-    static void output_log_header(FILE *stream, int level) {
-        std::string formatted_time = get_formatted_time();
-
-        const char *type;
-        switch (level) {
-        case SMARTNS_LOG_LEVEL_ERROR:
-            type = "ERROR";
-            break;
-        case SMARTNS_LOG_LEVEL_WARN:
-            type = "WARNG";
-            break;
-        case SMARTNS_LOG_LEVEL_INFO:
-            type = "INFOR";
-            break;
-        case SMARTNS_LOG_LEVEL_REORDER:
-            type = "REORD";
-            break;
-        case SMARTNS_LOG_LEVEL_TRACE:
-            type = "TRACE";
-            break;
-        case SMARTNS_LOG_LEVEL_CC:
-            type = "CONGC";
-            break;
-        default:
-            type = "UNKWN";
-        }
-
-        fprintf(stream, "%s %s: ", formatted_time.c_str(), type);
-    }
-
-    /// Return true iff REORDER/TRACE/CC mode logging is disabled. These modes can
-    /// print an unreasonable number of log messages.
-    static bool is_log_level_reasonable() {
-        return SMARTNS_LOG_LEVEL <= SMARTNS_LOG_LEVEL_INFO;
-    }
 
 } // namespace SmartNS
