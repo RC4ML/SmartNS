@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "config.h"
-
+#include "offset_handler.h"
 extern std::atomic<bool> stop_flag;
 
 class alignas(64) dma_handler {
@@ -54,6 +54,9 @@ public:
     size_t tx_depth;
     // convert to size_t 
     size_t send_buf_addr;
+
+    offset_handler send_offset_handler;
+    offset_handler send_comp_offset_handler;
 };
 
 class alignas(64) rxpath_handler {
@@ -81,28 +84,38 @@ public:
     size_t rx_depth;
     // convert to size_t 
     size_t recv_buf_addr;
+
+    offset_handler recv_offset_handler;
+    offset_handler recv_comp_offset_handler;
 };
 
 class alignas(64) datapath_handler {
 
 public:
-    dma_handler *dma_handler;
-    txpath_handler *txpath_handler;
-    rxpath_handler *rxpath_handler;
+    ::dma_handler *dma_handler;
+    ::txpath_handler *txpath_handler;
+    ::rxpath_handler *rxpath_handler;
 };
 
 class datapath_manager {
-
+private:
+    void create_raw_packet_main_qp();
+    void create_main_flow();
 public:
-    datapath_manager(std::string device_name, size_t numa_node);
+    datapath_manager(std::string device_name, size_t numa_node, bool is_server);
     ~datapath_manager();
 
+    bool is_server;
+    size_t numa_node;
+    std::string device_name;
+
     std::vector<datapath_handler> datapath_handler_list;
+
 
     ibv_context *all_rx_context;
     ibv_pd *all_rx_pd;
     ibv_qp *main_rss_qp;
-
+    ibv_rwq_ind_table *main_rwq_ind_table;
     ibv_flow *main_flow;
 
     std::vector<void *>txpath_send_buf_list;

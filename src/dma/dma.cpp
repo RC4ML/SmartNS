@@ -3,8 +3,8 @@
 ibv_qp *create_dma_qp(struct ibv_context *ibv_ctx,
     struct ibv_pd *pd, struct ibv_cq *rq_cq, struct ibv_cq *sq_cq, size_t depth) {
     struct ibv_qp_cap qp_cap = {
-    .max_send_wr = depth,
-    .max_recv_wr = depth,
+    .max_send_wr = static_cast<uint32_t>(depth),
+    .max_recv_wr = static_cast<uint32_t>(depth),
     .max_send_sge = 1,
     .max_recv_sge = 1,
     .max_inline_data = 0
@@ -49,7 +49,7 @@ ibv_qp *create_dma_qp(struct ibv_context *ibv_ctx,
 
 ibv_cq *create_dma_cq(ibv_context *ibv_ctx, size_t depth) {
     struct ibv_cq_init_attr_ex cq_attr = {
-    .cqe = depth,
+    .cqe = static_cast<uint32_t>(depth),
     .cq_context = NULL,
     .channel = NULL,
     .comp_vector = 0

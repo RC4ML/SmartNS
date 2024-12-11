@@ -97,10 +97,15 @@ set(DEVXSOURCES
     ${CMAKE_SOURCE_DIR}/src/devx/devx_device.cpp
     ${CMAKE_SOURCE_DIR}/src/devx/devx_mr.cpp
     ${CMAKE_SOURCE_DIR}/src/tcp_cm/tcp_cm.cpp
+    ${CMAKE_SOURCE_DIR}/src/rdma_cm/libr.cpp
+    ${CMAKE_SOURCE_DIR}/src/dma/dma.cpp
+
 )
 
 set(DPUSOURCES
+    ${CMAKE_SOURCE_DIR}/src/dpu/main.cpp
     ${CMAKE_SOURCE_DIR}/src/dpu/smartns.cpp
+    ${CMAKE_SOURCE_DIR}/src/dpu/config.cpp
 )
 
 set(LIBRARIES ${LIBRARIES} mlx5 ibverbs pthread numa gflags hdr_histogram_static minipcm_static)

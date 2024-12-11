@@ -9,7 +9,8 @@
 #define SMARTNS_RX_DEPTH 512
 #define SMARTNS_TX_PACKET_BUFFER (128)
 #define SMARTNS_RX_PACKET_BUFFER (2048)
-#define SMARTNS_TCP_PORT 6666
+#define SMARTNS_TCP_PORT (6666)
+#define SMARTNS_UDP_MAGIC_PORT (23456)
 
 #define SMARTNS_RX_BATCH 16
 #define SMARTNS_RX_SEG   1
@@ -17,6 +18,11 @@
 #define SMARTNS_TX_SEG   2
 
 #define SMARTNS_DMA_GID_INDEX 1
+
+#define RSS_HASH_KEY_LENGTH 40
+
 // pcie5.0-up client and down server
-static unsigned char client_mac[6] = { 0xa0, 0x88, 0xc2, 0x31, 0xf7, 0xde };
-static unsigned char server_mac[6] = { 0xa0, 0x88, 0xc2, 0x32, 0x04, 0x30 };
+extern unsigned char client_mac[6];
+extern unsigned char server_mac[6];
+
+extern uint8_t RSS_KEY[RSS_HASH_KEY_LENGTH];
