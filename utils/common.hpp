@@ -79,6 +79,10 @@ static size_t round_up(size_t num, size_t factor) {
     return num + factor - 1 - ((num + factor - 1) % factor);
 }
 
+#define ALLOCATE(var,type,size)                                     \
+{ if((var = static_cast<type*>(calloc(size,sizeof(type)))) == NULL)        \
+	{ fprintf(stderr," Cannot Allocate\n"); exit(1);}}
+
 namespace SmartNS {
 
 #pragma GCC diagnostic ignored "-Wunused-function"

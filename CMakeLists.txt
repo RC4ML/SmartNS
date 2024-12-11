@@ -96,6 +96,7 @@ set(UTILSOURCES
 set(DEVXSOURCES 
     ${CMAKE_SOURCE_DIR}/src/devx/devx_device.cpp
     ${CMAKE_SOURCE_DIR}/src/devx/devx_mr.cpp
+    ${CMAKE_SOURCE_DIR}/src/tcp_cm/tcp_cm.cpp
 )
 
 set(DPUSOURCES
