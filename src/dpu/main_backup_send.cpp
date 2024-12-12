@@ -66,7 +66,7 @@ int main(int argc, char *argv[]) {
     threads.reserve(num_threads);
 
     printf("is server %d\n", FLAGS_is_server);
-    for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
+    for (size_t i = 0;i < num_threads;i++) {
         data_manager->datapath_handler_list[i].cpu_id = i;
         if (FLAGS_is_server) {
             threads.emplace_back(std::thread(server_datapath, &data_manager->datapath_handler_list[i]));
