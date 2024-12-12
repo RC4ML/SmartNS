@@ -1,9 +1,9 @@
 #pragma once
 #include "common.hpp"
 
-#define SMARTNS_TX_RX_CORE 12
-#define SMARTNS_CONTROL_CORE 2
-#define SMARTNS_DMA_GROUP_SIZE 6
+#define SMARTNS_TX_RX_CORE 4
+#define SMARTNS_CONTROL_CORE 1
+#define SMARTNS_DMA_GROUP_SIZE 1
 
 #define SMARTNS_TX_DEPTH 512
 #define SMARTNS_RX_DEPTH 512
@@ -24,5 +24,8 @@
 // pcie5.0-up client and down server
 extern unsigned char client_mac[6];
 extern unsigned char server_mac[6];
+
+extern std::string client_ip;
+extern std::string server_ip;
 
 extern uint8_t RSS_KEY[RSS_HASH_KEY_LENGTH];

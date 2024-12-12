@@ -18,7 +18,7 @@
     // smartns_trace_file_or_default_stream. This can be stdout for basic debugging, or
     // eRPC's trace file for more involved debugging.
 
-#define smartns_trace_file_or_default_stream trace_file_
+#define smartns_trace_file_or_default_stream stdout
 // #define smartns_trace_file_or_default_stream SMARTNS_LOG_DEFAULT_STREAM
 
 // If SMARTNS_LOG_LEVEL is not defined, default to the highest level so that

@@ -153,5 +153,9 @@ namespace SmartNS {
 
         return shm_buf;
     }
-
+    void free_huge_mem(void *addr) {
+        if (addr != nullptr) {
+            assert(shmdt(addr) == 0);
+        }
+    }
 }

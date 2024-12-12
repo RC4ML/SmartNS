@@ -27,4 +27,6 @@ namespace SmartNS {
     int get_2M_huagepages_nr(size_t numa_node);
 
     void *get_huge_mem(uint32_t numa_node, size_t size);
+
+    void free_huge_mem(void *addr);
 }

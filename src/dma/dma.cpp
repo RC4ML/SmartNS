@@ -42,7 +42,7 @@ ibv_qp *create_dma_qp(struct ibv_context *ibv_ctx,
         exit(__LINE__);
     }
 
-    SMARTNS_INFO("create qp with qpn = 0x%x, max_send_wr = 0x%x\n", qp->qp_num, qpa.cap.max_send_wr);
+    SMARTNS_TRACE("create DMA qp with qpn = 0x%x, max_send_wr = 0x%x\n", qp->qp_num, qpa.cap.max_send_wr);
 
     return qp;
 }

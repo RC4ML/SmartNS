@@ -2,11 +2,13 @@
 #include "rdma_cm/libr.h"
 #include "numautil.h"
 #include "dma/dma.h"
+#include "raw_packet/raw_packet.h"
+
 std::atomic<bool> stop_flag = false;
 
 void datapath_manager::create_raw_packet_main_qp() {
     size_t rxq_size = SMARTNS_TX_RX_CORE;
-    if (is_log2(rxq_size)) {
+    if (!is_log2(rxq_size)) {
         struct ibv_device_attr_ex attr;
         assert(ibv_query_device_ex(all_rx_context, 0, &attr) == 0);
         rxq_size = attr.rss_caps.max_rwq_indirection_table_size;
@@ -21,6 +23,8 @@ void datapath_manager::create_raw_packet_main_qp() {
     }
 
     assert(is_log2(rxq_size));
+
+    main_rss_size = rxq_size;
 
     ibv_rwq_ind_table_init_attr rwq_ind_table_init_attr;
     rwq_ind_table_init_attr.log_ind_tbl_size = std::log2(rxq_size);
@@ -133,12 +137,34 @@ datapath_manager::datapath_manager(std::string device_name, size_t numa_node, bo
         rxpath_handler *rx_handler = new rxpath_handler(all_rx_context, all_rx_pd, rxpath_recv_buf_list[i], SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
         dma_handler *dma_handler = new ::dma_handler(tx_dma_context, tx_dma_pd, rxpath_recv_buf_list[i], SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
 
-        datapath_handler_list.push_back({ dma_handler, tx_handler, rx_handler });
+        datapath_handler_list.push_back({ i,i, dma_handler, tx_handler, rx_handler });
     }
 
     create_raw_packet_main_qp();
     create_main_flow();
 
+
+    // init tx path, include udp src port and init send buffer
+    for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
+        ipv4_tuple v4_tuple;
+        v4_tuple.src_addr = is_server ? ip_to_uint32(server_ip) : ip_to_uint32(client_ip);
+        v4_tuple.dst_addr = is_server ? ip_to_uint32(client_ip) : ip_to_uint32(server_ip);
+        v4_tuple.dport = SMARTNS_UDP_MAGIC_PORT;
+        for (uint16_t j = SMARTNS_UDP_MAGIC_PORT + 1;j < 65535;j++) {
+            v4_tuple.sport = j;
+            uint32_t rss = calculate_soft_rss(v4_tuple, RSS_KEY);
+            if ((rss % main_rss_size) % SMARTNS_TX_RX_CORE == i) {
+                datapath_handler_list[i].txpath_handler->src_port = j;
+                break;
+            }
+            assert(j != 65535);
+        }
+        for (size_t j = 0;j < SMARTNS_TX_DEPTH;j++) {
+            udp_packet *packet = reinterpret_cast<udp_packet *>(reinterpret_cast<size_t>(txpath_send_buf_list[i]) + j * SMARTNS_TX_PACKET_BUFFER);
+
+            init_udp_packet(packet, v4_tuple, is_server);
+        }
+    }
     SMARTNS_INFO("Datapath manager initialized\n");
 }
 
@@ -148,8 +174,8 @@ datapath_manager::~datapath_manager() {
     ibv_destroy_rwq_ind_table(main_rwq_ind_table);
 
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
-        free(txpath_send_buf_list[i]);
-        free(rxpath_recv_buf_list[i]);
+        SmartNS::free_huge_mem(txpath_send_buf_list[i]);
+        SmartNS::free_huge_mem(rxpath_recv_buf_list[i]);
 
         ibv_context *tx_context = datapath_handler_list[i].txpath_handler->context;
         ibv_pd *tx_pd = datapath_handler_list[i].txpath_handler->pd;

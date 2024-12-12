@@ -99,6 +99,7 @@ set(DEVXSOURCES
     ${CMAKE_SOURCE_DIR}/src/tcp_cm/tcp_cm.cpp
     ${CMAKE_SOURCE_DIR}/src/rdma_cm/libr.cpp
     ${CMAKE_SOURCE_DIR}/src/dma/dma.cpp
+    ${CMAKE_SOURCE_DIR}/src/raw_packet/raw_packet.cpp
 
 )
 

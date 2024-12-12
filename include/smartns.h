@@ -2,6 +2,8 @@
 #include "common.hpp"
 #include "config.h"
 #include "offset_handler.h"
+#include "numautil.h"
+
 extern std::atomic<bool> stop_flag;
 
 class alignas(64) dma_handler {
@@ -57,6 +59,9 @@ public:
 
     offset_handler send_offset_handler;
     offset_handler send_comp_offset_handler;
+
+    // calculate rss and select special port for remote server 
+    uint16_t src_port;
 };
 
 class alignas(64) rxpath_handler {
@@ -92,6 +97,8 @@ public:
 class alignas(64) datapath_handler {
 
 public:
+    size_t thread_id;
+    size_t cpu_id;
     ::dma_handler *dma_handler;
     ::txpath_handler *txpath_handler;
     ::rxpath_handler *rxpath_handler;
@@ -116,6 +123,7 @@ public:
     ibv_pd *all_rx_pd;
     ibv_qp *main_rss_qp;
     ibv_rwq_ind_table *main_rwq_ind_table;
+    size_t main_rss_size;
     ibv_flow *main_flow;
 
     std::vector<void *>txpath_send_buf_list;
