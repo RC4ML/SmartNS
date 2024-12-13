@@ -3,12 +3,14 @@
 #include "common.hpp"
 #include "page.h"
 #include "offset_handler.h"
+#include "config.h"
 
 #define RDMA_TX_DEPTH (128)
 #define RDMA_RX_DEPTH (128)
 #define RDMA_MAX_OUT_READ (1)
 #define RDMA_IB_PORT (1)
-#define RDMA_GID_INDEX (3)
+#define RDMA_HOST_GID_INDEX (3)
+#define RDMA_BF_GID_INDEX (1)
 #define RDMA_MAX_INLINE_SIZE (0)
 
 #define MIN_RNR_TIMER	(12)
@@ -23,7 +25,9 @@ struct pingpong_info {
     int 				psn;
     unsigned			rkey;
     unsigned long long 	vaddr;
-    union ibv_gid		gid;
+    unsigned char	raw_gid[16];
+    // only used for kernel qp
+    unsigned char mac[6];
     int					gid_index;
     int					out_reads;
 };
@@ -37,23 +41,29 @@ struct rdma_param {
     int max_out_read;
     uint32_t max_inline_size;
     int 						numa_node;
-    enum ibv_mtu				cur_mtu;
-    int							page_size;
-    int							cacheline_size;
-    struct ibv_context **contexts;
-    int							num_contexts;
     int 						batch_size;
     int 						sge_per_wr;
     bool use_devx_context;
+
+    // following param init by roce_init
+    enum ibv_mtu				cur_mtu;
+    struct ibv_context **contexts;
+    int							num_contexts;
     rdma_param() {
         ib_port = RDMA_IB_PORT;
-        gid_index = RDMA_GID_INDEX;
-        page_size = PAGE_SIZE;
-        cacheline_size = CACHE_LINE_SZ;
+#if defined(__x86_64__)
+        gid_index = RDMA_HOST_GID_INDEX;
+#elif defined(__aarch64__)
+        gid_index = RDMA_BF_GID_INDEX;
+#endif
         tx_depth = RDMA_TX_DEPTH;
         rx_depth = RDMA_RX_DEPTH;
         max_out_read = RDMA_MAX_OUT_READ;
         max_inline_size = RDMA_MAX_INLINE_SIZE;
+        numa_node = 0;
+        batch_size = 1;
+        sge_per_wr = 1;
+        use_devx_context = false;
     }
 };
 

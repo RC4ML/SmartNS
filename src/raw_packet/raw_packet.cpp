@@ -16,9 +16,9 @@ uint32_t calculate_soft_rss(ipv4_tuple tuple, const uint8_t *rss_key) {
     return ret;
 }
 
-uint32_t ip_to_uint32(std::string &ip) {
+uint32_t ip_to_uint32(const char *ip) {
     struct in_addr addr;
-    assert(inet_pton(AF_INET, ip.c_str(), &addr) == 1);
+    assert(inet_pton(AF_INET, ip, &addr) == 1);
     return ntohl(addr.s_addr);
 }
 

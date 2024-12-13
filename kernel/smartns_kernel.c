@@ -50,6 +50,11 @@ static struct file_operations fops =
 int smartns_add_device(struct ib_device *dev) {
     struct ib_port_attr port_attr;
     struct PingPongInfo response;
+    int response_size;
+    DECLARE_WAIT_QUEUE_HEAD(recv_wait);
+
+    pr_info("%s: device show\n", dev->name);
+
     if (strcmp(dev->name, "mlx5_0") == 0) {
         global_device = dev;
         pr_info("%s: device added\n", dev->name);
@@ -67,17 +72,22 @@ int smartns_add_device(struct ib_device *dev) {
             pr_err("%s: failed to create qp and send to bf\n", MODULE_NAME);
             return -EIO;
         }
-        while (1) {
-            if (!skb_queue_empty(&global_tcp_socket->sk->sk_receive_queue)) {
-                memset(&response, 0, sizeof(struct PingPongInfo));
-                if (tcp_client_receive(global_tcp_socket, (char *)&response, MSG_DONTWAIT) != sizeof(struct PingPongInfo)) {
-                    pr_err("%s: failed to receive response\n", MODULE_NAME);
-                    return -EIO;
-                }
-                break;
+        wait_event_timeout(recv_wait, \
+            !skb_queue_empty(&global_tcp_socket->sk->sk_receive_queue), \
+            5 * HZ);
+
+        if (!skb_queue_empty(&global_tcp_socket->sk->sk_receive_queue)) {
+            response_size = tcp_client_receive(global_tcp_socket, (char *)&response, MSG_DONTWAIT);
+            if (response_size != sizeof(struct PingPongInfo)) {
+                pr_err("%s: recv inlegal bf response %d\n", MODULE_NAME, response_size);
+                return -EIO;
             }
+            pr_info("%s: received bf response\n", MODULE_NAME);
+            smartns_init_qp(&global_qp_handler, &response);
+        } else {
+            pr_err("%s: failed to receive bf response\n", MODULE_NAME);
+            return -EIO;
         }
-        smartns_init_qp(&global_qp_handler, &response);
     }
     return 0;
 }
@@ -175,6 +185,11 @@ static int smartns_release(struct inode *inodep, struct file *filep) {
     filep->private_data = NULL;
 
     smartns_free_qp(&global_qp_handler);
+
+    if (global_tcp_socket) {
+        sock_release(global_tcp_socket);
+        global_tcp_socket = NULL;
+    }
 
     pr_info("%s: tgid %d pid %d successfully closed\n", MODULE_NAME, tgid, pid);
 

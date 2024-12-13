@@ -122,7 +122,12 @@ int smartns_create_qp_and_send_to_bf(struct smartns_qp_handler *now_info) {
 
     pr_info("%s: Create success, local QPN:%#06x\n", MODULE_NAME, now_info->qp->qp_num);
 
-    return tcp_client_send(global_tcp_socket, (const char *)&pingpong_info, sizeof(struct PingPongInfo), MSG_DONTWAIT);
+    index = tcp_client_send(global_tcp_socket, (const char *)&pingpong_info, sizeof(struct PingPongInfo), MSG_DONTWAIT);
+    if (index != sizeof(struct PingPongInfo)) {
+        pr_err("%s: only send %d size to bf\n", MODULE_NAME, index);
+        return -EIO;
+    }
+    return 0;
 }
 
 void smartns_send_reg_mr(struct smartns_qp_handler *info) {

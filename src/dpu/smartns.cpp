@@ -368,3 +368,54 @@ dma_handler::~dma_handler() {
     ibv_destroy_cq(dma_send_cq);
     ibv_dereg_mr(rxpath_recv_buf_mr);
 }
+
+controlpath_manager::controlpath_manager(std::string device_name, size_t numa_node, bool is_server) {
+    this->numa_node = numa_node;
+    this->is_server = is_server;
+    this->device_name = device_name;
+
+    control_rdma_param.device_name = device_name;
+    control_rdma_param.numa_node = numa_node;
+
+    roce_init(control_rdma_param, 1);
+
+    send_recv_buf_size = (control_tx_depth + control_rx_depth) * control_packet_size;
+    send_recv_buf = SmartNS::get_huge_mem(numa_node, send_recv_buf_size);
+    for (size_t j = 0;j < send_recv_buf_size / sizeof(size_t);j++) {
+        ((size_t *)send_recv_buf)[j] = 0;
+    }
+
+    control_qp_handler = create_qp_rc(control_rdma_param, send_recv_buf, send_recv_buf_size, &local_bf_info, 0);
+
+    assert(control_qp_handler);
+
+    for (size_t i = 0;i < 6;i++) {
+        local_bf_info.mac[i] = is_server ? server_mac[i] : client_mac[i];
+    }
+
+    send_handler.init(control_tx_depth, control_packet_size, 0);
+    send_comp_handler.init(control_tx_depth, control_packet_size, 0);
+    recv_handler.init(control_rx_depth, control_packet_size, control_tx_depth * control_packet_size);
+    recv_comp_handler.init(control_rx_depth, control_packet_size, control_tx_depth * control_packet_size);
+
+    control_net_param.isServer = true;
+    control_net_param.sock_port = SMARTNS_TCP_PORT;
+}
+
+controlpath_manager::~controlpath_manager() {
+    free(control_qp_handler->send_sge_list);
+    free(control_qp_handler->recv_sge_list);
+    free(control_qp_handler->send_wr);
+    free(control_qp_handler->recv_wr);
+
+    ibv_destroy_qp(control_qp_handler->qp);
+    ibv_dereg_mr(control_qp_handler->mr);
+    ibv_destroy_cq(control_qp_handler->send_cq);
+    ibv_destroy_cq(control_qp_handler->recv_cq);
+    ibv_dealloc_pd(control_qp_handler->pd);
+
+    ibv_close_device(control_rdma_param.contexts[0]);
+
+    SmartNS::free_huge_mem(send_recv_buf);
+    free(control_qp_handler);
+}

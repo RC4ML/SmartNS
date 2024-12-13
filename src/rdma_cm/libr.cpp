@@ -131,8 +131,8 @@ qp_handler *create_qp_rc(rdma_param &rdma_param, void *buf, size_t size, struct 
     ALLOCATE(recv_bar_wr, struct ibv_recv_wr, 1);
 
     //check valid mem
-    assert(size > static_cast<size_t>(rdma_param.page_size));
-    assert((reinterpret_cast<size_t>(buf)) % rdma_param.page_size == 0);
+    assert(size > static_cast<size_t>(PAGE_SIZE));
+    assert((reinterpret_cast<size_t>(buf)) % PAGE_SIZE == 0);
 
     //create pd/mr/scq/rcq
     assert(pd = ibv_alloc_pd(rdma_param.contexts[context_index]));
@@ -181,7 +181,7 @@ qp_handler *create_qp_rc(rdma_param &rdma_param, void *buf, size_t size, struct 
     info->rkey = mr->rkey;
     info->out_reads = rdma_param.max_out_read;
     info->vaddr = reinterpret_cast<uintptr_t>(buf);
-    memcpy(info->gid.raw, temp_gid.raw, 16);
+    memcpy(info->raw_gid, temp_gid.raw, 16);
 
     qp_handler->buf = reinterpret_cast<size_t> (buf);
     qp_handler->send_cq = send_cq;
@@ -217,7 +217,7 @@ void connect_qp_rc(rdma_param &rdma_param, qp_handler &qp_handler, struct pingpo
     attr.ah_attr.dlid = remote_info->lid;
     attr.ah_attr.sl = 0;//service level default 0
     attr.ah_attr.is_global = 1;
-    attr.ah_attr.grh.dgid = remote_info->gid;
+    memcpy(attr.ah_attr.grh.dgid.raw, remote_info->raw_gid, 16);
     attr.ah_attr.grh.sgid_index = rdma_param.gid_index;
     attr.ah_attr.grh.hop_limit = 0xFF;
     attr.ah_attr.grh.traffic_class = 0;
@@ -330,14 +330,14 @@ void print_pingpong_info(struct pingpong_info *info) {
     SMARTNS_INFO(INFO_FMT, dlid, info->qpn, info->psn,
         info->rkey, info->vaddr,
         "GID",
-        info->gid.raw[0], info->gid.raw[1],
-        info->gid.raw[2], info->gid.raw[3],
-        info->gid.raw[4], info->gid.raw[5],
-        info->gid.raw[6], info->gid.raw[7],
-        info->gid.raw[8], info->gid.raw[9],
-        info->gid.raw[10], info->gid.raw[11],
-        info->gid.raw[12], info->gid.raw[13],
-        info->gid.raw[14], info->gid.raw[15]);
+        info->raw_gid[0], info->raw_gid[1],
+        info->raw_gid[2], info->raw_gid[3],
+        info->raw_gid[4], info->raw_gid[5],
+        info->raw_gid[6], info->raw_gid[7],
+        info->raw_gid[8], info->raw_gid[9],
+        info->raw_gid[10], info->raw_gid[11],
+        info->raw_gid[12], info->raw_gid[13],
+        info->raw_gid[14], info->raw_gid[15]);
 }
 
 void post_send(qp_handler &qp_handler, size_t offset, int length) {

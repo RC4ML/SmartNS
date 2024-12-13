@@ -1,5 +1,4 @@
 #pragma once
-#include "common.hpp"
 
 #define SMARTNS_TX_RX_CORE 4
 #define SMARTNS_CONTROL_CORE 1
@@ -25,7 +24,7 @@
 extern unsigned char client_mac[6];
 extern unsigned char server_mac[6];
 
-extern std::string client_ip;
-extern std::string server_ip;
+extern const char *client_ip;
+extern const char *server_ip;
 
-extern uint8_t RSS_KEY[RSS_HASH_KEY_LENGTH];
+extern unsigned char RSS_KEY[RSS_HASH_KEY_LENGTH];

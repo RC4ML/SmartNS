@@ -56,6 +56,6 @@ struct ipv4_tuple {
 
 uint32_t calculate_soft_rss(ipv4_tuple tuple, const uint8_t *rss_key);
 
-uint32_t ip_to_uint32(std::string &ip);
+uint32_t ip_to_uint32(const char *ip);
 
 void init_udp_packet(udp_packet *packet, ipv4_tuple tuple, bool is_server);

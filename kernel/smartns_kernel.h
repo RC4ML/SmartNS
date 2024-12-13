@@ -14,12 +14,13 @@
 #include <net/sock.h>
 #include <linux/tcp.h>
 #include <linux/in.h>
+#include <linux/interrupt.h>
+#include <linux/hrtimer.h>
 
 #include <rdma/ib_verbs.h>
 #include <rdma/rdma_cm.h>
 #include <rdma/ib_cache.h>
 
-#define SMARTNS_BF_IP_ADDR "192.168.100.2"
 #define SMARTNS_BF_TCP_PORT 6666
 #define SMARTNS_IOCTL 0x12
 
@@ -36,6 +37,8 @@
 
 #define MODULE_NAME "smartns"
 #define  DEVICE_NAME "smartns"
+
+extern unsigned char SMARTNS_BF_IP_ADDR[5];
 
 extern struct ib_device *global_device;
 

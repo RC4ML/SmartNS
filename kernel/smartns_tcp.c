@@ -1,5 +1,7 @@
 #include "smartns_kernel.h"
 
+unsigned char SMARTNS_BF_IP_ADDR[5] = { 192,168,100,2,'\0' };
+
 u32 create_address(u8 *ip) {
     u32 addr = 0;
     int i;
@@ -53,7 +55,6 @@ int tcp_client_send(struct socket *sock, const char *buf, const size_t length, \
     msg.msg_flags = flags;
 
 repeat_send:
-
     vec.iov_len = left;
     vec.iov_base = (char *)buf + written;
 

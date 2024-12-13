@@ -25,9 +25,7 @@ void socket_init(tcp_param &net_param) {
         net_param.connfd = accept(sockfd, NULL, 0);
         assert(net_param.connfd >= 0);
 
-        int nodeId = 0;
-        assert(read(net_param.connfd, static_cast<void *>(&nodeId), sizeof(nodeId)) == sizeof(nodeId));
-        SMARTNS_INFO("TCP connected by %d\n", nodeId);
+        SMARTNS_INFO("TCP connected\n");
     } else {
         sleep(1);
         addrinfo hints{};
@@ -39,7 +37,6 @@ void socket_init(tcp_param &net_param) {
         assert(connect(connfd, server_address->ai_addr, server_address->ai_addrlen) == 0);
         freeaddrinfo(server_address);
 
-        assert(send(connfd, static_cast<void *>(&connfd), sizeof(connfd), 0) == sizeof(connfd));
         net_param.connfd = connfd;
     }
 }

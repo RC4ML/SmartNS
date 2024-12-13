@@ -12,6 +12,12 @@ KDIR := /lib/modules/$(shell uname -r)/build
 
 PWD:=$(shell pwd)
 
+## add extra symbols for nvidia driver
+# EXTRA_SYMBOLS := ${PWD}/extra_symvers.updated
+
+# EXTRA_CFLAGS := -DKBUILD_EXTRA_SYMBOLS=$(EXTRA_SYMBOLS)
+
+
 all:
 	make -C $(KDIR)  M=$(PWD) modules
 clean:

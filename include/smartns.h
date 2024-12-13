@@ -3,6 +3,8 @@
 #include "config.h"
 #include "offset_handler.h"
 #include "numautil.h"
+#include "rdma_cm/libr.h"
+#include "tcp_cm/tcp_cm.h"
 
 extern std::atomic<bool> stop_flag;
 
@@ -128,4 +130,33 @@ public:
 
     std::vector<void *>txpath_send_buf_list;
     std::vector<void *>rxpath_recv_buf_list;
+};
+
+class alignas(64) controlpath_manager {
+public:
+
+    const size_t control_packet_size = 512;
+    const size_t control_tx_depth = 128;
+    const size_t control_rx_depth = 128;
+    controlpath_manager(std::string device_name, size_t numa_node, bool is_server);
+    ~controlpath_manager();
+
+    size_t cpu_id;
+
+    bool is_server;
+    size_t numa_node;
+    std::string device_name;
+
+    rdma_param control_rdma_param;
+    void *send_recv_buf;
+    size_t send_recv_buf_size;
+    pingpong_info local_bf_info;
+    pingpong_info remote_host_info;
+    qp_handler *control_qp_handler;
+    offset_handler send_handler;
+    offset_handler send_comp_handler;
+    offset_handler recv_handler;
+    offset_handler recv_comp_handler;
+
+    tcp_param control_net_param;
 };
