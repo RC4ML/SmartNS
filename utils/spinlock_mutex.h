@@ -1,10 +1,10 @@
 #pragma once
 
 #include <atomic>
-
+#include <cstddef>
 class spinlock_mutex final {
 private:
-    std::atomic_flag flag = ATOMIC_FLAG_INIT;
+    alignas(4 * sizeof(std::max_align_t)) std::atomic_flag flag = ATOMIC_FLAG_INIT;
 
 public:
     template<typename WhileIdleFunc = void()>
@@ -29,8 +29,8 @@ public:
 
 class spinlock_rw_mutex {
 private:
-    std::atomic<int> readers_count{ 0 };
-    std::atomic<bool> writer_lock{ false };
+    alignas(2 * sizeof(std::max_align_t)) std::atomic<int> readers_count{ 0 };
+    alignas(2 * sizeof(std::max_align_t)) std::atomic<bool> writer_lock{ false };
 
 public:
     void lock_read() {
