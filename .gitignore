@@ -34,7 +34,6 @@
 /clang-target
 /build_host
 /build_dpu
-/lib*
 /bin*
 /bin_host
 /bin_dpu

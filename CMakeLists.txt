@@ -91,6 +91,7 @@ set(UTILSOURCES
     ${CMAKE_SOURCE_DIR}/utils/gflags_common.cpp
     ${CMAKE_SOURCE_DIR}/utils/hdr_histogram.cpp
     ${CMAKE_SOURCE_DIR}/utils/numautil.cpp
+    ${CMAKE_SOURCE_DIR}/utils/buddy.cpp
 )
 
 set(DEVXSOURCES 
@@ -100,7 +101,6 @@ set(DEVXSOURCES
     ${CMAKE_SOURCE_DIR}/src/rdma_cm/libr.cpp
     ${CMAKE_SOURCE_DIR}/src/dma/dma.cpp
     ${CMAKE_SOURCE_DIR}/src/raw_packet/raw_packet.cpp
-
 )
 
 set(DPUSOURCES

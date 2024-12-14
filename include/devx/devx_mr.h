@@ -18,17 +18,6 @@ struct devx_mr {
     uint16_t vhca_id;
 };
 
-struct vhca_resource {
-    ibv_pd *pd;
-    devx_mr *mr;
-
-    // exchanged
-    uint16_t vhca_id;
-    void *addr;
-    uint64_t size;
-    uint32_t mkey;
-};
-
 /*
  * Query pd number of ibv_pd
  *
