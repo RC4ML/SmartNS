@@ -92,6 +92,7 @@ set(UTILSOURCES
     ${CMAKE_SOURCE_DIR}/utils/hdr_histogram.cpp
     ${CMAKE_SOURCE_DIR}/utils/numautil.cpp
     ${CMAKE_SOURCE_DIR}/utils/buddy.cpp
+    ${CMAKE_SOURCE_DIR}/utils/allocator.cpp
 )
 
 set(DEVXSOURCES 
