@@ -16,7 +16,11 @@
 #define SMARTNS_TX_BATCH 16
 #define SMARTNS_TX_SEG   2
 
+#if defined(__x86_64__)
+#define SMARTNS_DMA_GID_INDEX 3
+#elif defined(__aarch64__)
 #define SMARTNS_DMA_GID_INDEX 1
+#endif
 
 #define RSS_HASH_KEY_LENGTH 40
 

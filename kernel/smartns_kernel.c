@@ -1,4 +1,5 @@
 #include "smartns_kernel.h"
+#include "../lib/smartns_abi.h"
 
 //  Define the module metadata.
 
@@ -30,6 +31,8 @@ struct socket *global_tcp_socket = NULL;
 
 
 struct smartns_qp_handler global_qp_handler;
+static DEFINE_MUTEX(qp_mutex);
+
 
 unsigned int current_mtu;
 
@@ -104,6 +107,7 @@ static int __init mod_init(void) {
 
     //  Create a mutex to guard io operations.
     mutex_init(&ioMutex);
+    mutex_init(&qp_mutex);
 
     //  Register the device, allocating a major number.
     majorNumber = register_chrdev(0 /* i.e. allocate a major number for me */, DEVICE_NAME, &fops);
@@ -133,6 +137,7 @@ static void __exit mod_exit(void) {
     ib_unregister_client(&smartns_ib_client);
 
     mutex_destroy(&ioMutex);
+    mutex_destroy(&qp_mutex);
     pr_info("%s: device unregistered\n", MODULE_NAME);
 }
 
@@ -197,14 +202,14 @@ static int smartns_release(struct inode *inodep, struct file *filep) {
     return 0;
 }
 
-static int smartns_test(smartns_info_t *info, void __user *_params) {
-    return 0;
-}
-
 static long smartns_ioctl(struct inode *inode, struct file *filep, unsigned int cmd, unsigned long arg) {
     int ret = 0;
+    size_t send_offset;
+    int ne, index;
+    unsigned int size;
     smartns_info_t *info = filep->private_data;
-    void __user *argp = (void __user *)arg;
+    void __user *param = (void __user *)arg;
+    struct SMARTNS_KERNEL_COMMON_PARAMS *common_params;
 
     if (_IOC_TYPE(cmd) != SMARTNS_IOCTL) {
         pr_err("%s: invalid ioctl type\n", MODULE_NAME);
@@ -221,14 +226,71 @@ static long smartns_ioctl(struct inode *inode, struct file *filep, unsigned int 
         return -EACCES;
     }
 
-    switch (cmd) {
-    case SMARTNS_IOC_TEST:
-        ret = smartns_test(info, argp);
-        break;
-    default:
-        pr_err("%s: invalid ioctl command %d\n", MODULE_NAME, cmd);
-        return -ENOTTY;
+    size = _IOC_SIZE(cmd);
+
+    mutex_lock(&qp_mutex);
+
+    send_offset = offset_handler_offset(&global_qp_handler.send_offset_handler) + global_qp_handler.local_buf;
+    if (copy_from_user((void *)send_offset, param, size)) {
+        pr_err("%s: failed to copy from user\n", MODULE_NAME);
+        ret = -EFAULT;
     }
+    common_params = (struct SMARTNS_KERNEL_COMMON_PARAMS *)send_offset;
+    common_params->pid = current->pid;
+    common_params->tgid = current->tgid;
+    common_params->cmd = cmd;
+
+    global_qp_handler.send_sge_list[0].addr = global_qp_handler.local_dma_buf + offset_handler_offset(&global_qp_handler.send_offset_handler);
+    global_qp_handler.send_sge_list[0].length = size;
+    global_qp_handler.send_wr[0].wr_id = offset_handler_offset(&global_qp_handler.send_offset_handler);
+    global_qp_handler.send_wr[0].next = NULL;
+    if (ib_post_send(global_qp_handler.qp, global_qp_handler.send_wr, NULL)) {
+        pr_err("%s: failed to post send\n", MODULE_NAME);
+        return -EFAULT;
+    }
+
+    ne = ib_poll_cq(global_qp_handler.send_cq, SMARTNS_CQ_POLL_BATCH, global_qp_handler.send_wc);
+    index = 0;
+    for (;index < ne;index++) {
+        if (global_qp_handler.send_wc[index].status != IB_WC_SUCCESS) {
+            pr_err("%s: failed to send data\n", MODULE_NAME);
+            return -EFAULT;
+        }
+    }
+
+    offset_handler_step(&global_qp_handler.send_offset_handler);
+
+    while (1) {
+        ne = ib_poll_cq(global_qp_handler.recv_cq, SMARTNS_CQ_POLL_BATCH, global_qp_handler.recv_wc);
+        if (ne > 0) {
+            if (ne != 1) {
+                pr_err("%s: inlegal recv wc num %d\n", MODULE_NAME, ne);
+                return -EFAULT;
+            }
+            if (global_qp_handler.recv_wc[0].status != IB_WC_SUCCESS || global_qp_handler.recv_wc[0].byte_len != size) {
+                pr_err("%s: failed to recv data\n", MODULE_NAME);
+                return -EFAULT;
+            }
+            if (copy_to_user(param, (void *)(global_qp_handler.local_buf + global_qp_handler.recv_wc[0].wr_id), size)) {
+                pr_err("%s: failed to copy to user\n", MODULE_NAME);
+                return -EFAULT;
+            }
+
+            global_qp_handler.recv_sge_list[0].addr = global_qp_handler.local_dma_buf + offset_handler_offset(&global_qp_handler.recv_offset_handler);
+            global_qp_handler.recv_sge_list[0].length = SMARTNS_MSG_SIZE;
+            global_qp_handler.recv_wr[0].wr_id = offset_handler_offset(&global_qp_handler.recv_offset_handler);
+            global_qp_handler.recv_wr[0].next = NULL;
+            if (ib_post_recv(global_qp_handler.qp, global_qp_handler.recv_wr, NULL)) {
+                pr_err("%s: failed to post recv\n", MODULE_NAME);
+                return -EFAULT;
+            }
+            offset_handler_step(&global_qp_handler.recv_offset_handler);
+
+            break;
+        }
+    }
+
+    mutex_unlock(&qp_mutex);
     return ret;
 }
 

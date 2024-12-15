@@ -28,23 +28,23 @@ int smartns_create_qp_and_send_to_bf(struct smartns_qp_handler *now_info) {
         pr_err("%s: failed to allocate pd\n", MODULE_NAME);
         return -ENOMEM;
     }
-    now_info->mr = ib_alloc_mr(now_info->pd, IB_MR_TYPE_MEM_REG, SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE / PAGE_SIZE);
+    now_info->mr = ib_alloc_mr(now_info->pd, IB_MR_TYPE_MEM_REG, (SMARTNS_TX_DEPTH + SMARTNS_RX_DEPTH) * SMARTNS_MSG_SIZE / PAGE_SIZE);
     if (!now_info->mr) {
         pr_err("%s: failed to allocate mr\n", MODULE_NAME);
         return -ENOMEM;
     }
-    now_info->original_buf = (size_t)vmalloc(SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE);
+    now_info->original_buf = (size_t)vmalloc((SMARTNS_TX_DEPTH + SMARTNS_RX_DEPTH) * SMARTNS_MSG_SIZE);
     if (!now_info->original_buf) {
         pr_err("%s: failed to allocate original_buf\n", MODULE_NAME);
         return -ENOMEM;
     }
-    now_info->sg = kcalloc(SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE / PAGE_SIZE, sizeof(struct scatterlist), GFP_KERNEL);
+    now_info->sg = kcalloc((SMARTNS_TX_DEPTH + SMARTNS_RX_DEPTH) * SMARTNS_MSG_SIZE / PAGE_SIZE, sizeof(struct scatterlist), GFP_KERNEL);
     if (!now_info->sg) {
         pr_err("%s: failed to allocate sg\n", MODULE_NAME);
         return -ENOMEM;
     }
-    sg_init_table(now_info->sg, SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE / PAGE_SIZE);
-    for (index = 0;index < SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE / PAGE_SIZE;index++) {
+    sg_init_table(now_info->sg, (SMARTNS_TX_DEPTH + SMARTNS_RX_DEPTH) * SMARTNS_MSG_SIZE / PAGE_SIZE);
+    for (index = 0;index < (SMARTNS_TX_DEPTH + SMARTNS_RX_DEPTH) * SMARTNS_MSG_SIZE / PAGE_SIZE;index++) {
         page_start = (unsigned long)now_info->original_buf + (index * PAGE_SIZE);
         now_page = vmalloc_to_page((void *)page_start);
         if (!now_page) {
@@ -55,13 +55,13 @@ int smartns_create_qp_and_send_to_bf(struct smartns_qp_handler *now_info) {
     }
 
     now_info->sg_offset = 0;
-    if (ib_dma_map_sg(global_device, now_info->sg, SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE / PAGE_SIZE, DMA_BIDIRECTIONAL) < 0) {
+    if (ib_dma_map_sg(global_device, now_info->sg, (SMARTNS_TX_DEPTH + SMARTNS_RX_DEPTH) * SMARTNS_MSG_SIZE / PAGE_SIZE, DMA_BIDIRECTIONAL) < 0) {
         pr_err("%s: failed to map sg\n", MODULE_NAME);
         return -ENOMEM;
     }
 
-    index = ib_map_mr_sg(now_info->mr, now_info->sg, SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE / PAGE_SIZE, &now_info->sg_offset, PAGE_SIZE);
-    if (index < 0 || index != SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE / PAGE_SIZE) {
+    index = ib_map_mr_sg(now_info->mr, now_info->sg, (SMARTNS_TX_DEPTH + SMARTNS_RX_DEPTH) * SMARTNS_MSG_SIZE / PAGE_SIZE, &now_info->sg_offset, PAGE_SIZE);
+    if (index < 0 || index != (SMARTNS_TX_DEPTH + SMARTNS_RX_DEPTH) * SMARTNS_MSG_SIZE / PAGE_SIZE) {
         pr_err("%s: failed to map mr sg\n", MODULE_NAME);
         return -ENOMEM;
     }
@@ -119,6 +119,16 @@ int smartns_create_qp_and_send_to_bf(struct smartns_qp_handler *now_info) {
     now_info->num_sges_per_wr = SMARTNS_NUM_SGES_PER_WR;
     now_info->tx_depth = SMARTNS_TX_DEPTH;
     now_info->rx_depth = SMARTNS_RX_DEPTH;
+
+    now_info->send_offset_handler.max_num = SMARTNS_TX_DEPTH;
+    now_info->send_offset_handler.step_size = SMARTNS_MSG_SIZE;
+    now_info->send_offset_handler.buf_offset = 0;
+    now_info->send_offset_handler.cur = 0;
+
+    now_info->recv_offset_handler.max_num = SMARTNS_RX_DEPTH;
+    now_info->recv_offset_handler.step_size = SMARTNS_MSG_SIZE;
+    now_info->recv_offset_handler.buf_offset = SMARTNS_TX_DEPTH * SMARTNS_MSG_SIZE;
+    now_info->recv_offset_handler.cur = 0;
 
     pr_info("%s: Create success, local QPN:%#06x\n", MODULE_NAME, now_info->qp->qp_num);
 
@@ -181,6 +191,18 @@ void smartns_init_wr_base_send_recv(struct smartns_qp_handler *info) {
         if (index > 0) {
             recv_wr[index - 1].next = recv_wr + index;
         }
+    }
+
+    for (index = 0;index < SMARTNS_RX_DEPTH;index++) {
+        recv_sge_list[0].addr = info->local_dma_buf + offset_handler_offset(&info->recv_offset_handler);
+        recv_sge_list[0].length = SMARTNS_MSG_SIZE;
+        recv_wr[0].wr_id = offset_handler_offset(&info->recv_offset_handler);
+        recv_wr[0].next = NULL;
+        recv_wr[0].num_sge = 1;
+        if (ib_post_recv(info->qp, recv_wr, NULL) != 0) {
+            pr_err("%s: failed to post recv\n", MODULE_NAME);
+        }
+        offset_handler_step(&info->recv_offset_handler);
     }
 }
 

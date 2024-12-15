@@ -22,11 +22,10 @@
 #include <rdma/ib_cache.h>
 
 #define SMARTNS_BF_TCP_PORT 6666
-#define SMARTNS_IOCTL 0x12
 
 
-#define SMARTNS_TX_DEPTH 256
-#define SMARTNS_RX_DEPTH 256
+#define SMARTNS_TX_DEPTH 128
+#define SMARTNS_RX_DEPTH 128
 #define SMARTNS_NUM_WRS 1   // = batch size
 #define SMARTNS_NUM_SGES_PER_WR 1 // = sge per wr
 #define SMARTNS_MSG_SIZE 512
@@ -47,6 +46,21 @@ extern struct ib_client smartns_ib_client;
 extern struct socket *global_tcp_socket;
 
 extern unsigned int current_mtu;
+
+struct offset_handler {
+    int max_num;
+    int step_size;
+    int buf_offset;
+    size_t cur;
+};
+
+static void offset_handler_step(struct offset_handler *handler) {
+    handler->cur += 1;
+}
+
+static size_t offset_handler_offset(struct offset_handler *handler) {
+    return (handler->cur % handler->max_num) * handler->step_size + handler->buf_offset;
+}
 
 struct smartns_qp_handler {
     // used for rdma
@@ -75,6 +89,9 @@ struct smartns_qp_handler {
     int num_sges;
     int tx_depth;
     int rx_depth;
+
+    struct offset_handler send_offset_handler;
+    struct offset_handler recv_offset_handler;
 };
 
 struct smartns_info {
