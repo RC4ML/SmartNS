@@ -191,6 +191,11 @@ struct devx_mr *devx_reg_mr(struct ibv_pd *pd, void *addr, size_t size, uint32_t
     uint32_t pdn;
     uint32_t mkey;
     struct devx_mr *mr;
+    struct devx_hca_capabilities caps;
+    if (devx_query_hca_caps(pd->context, &caps) != 0) {
+        printf("can't query_hca_caps\n");
+        return NULL;
+    }
     struct mlx5dv_devx_umem *umem = devx_umem_reg(pd->context, addr, size, access);
     struct mlx5dv_devx_obj *mkey_obj;
     if (umem == NULL && errno == EPROTONOSUPPORT) {
@@ -219,8 +224,8 @@ struct devx_mr *devx_reg_mr(struct ibv_pd *pd, void *addr, size_t size, uint32_t
     mr->rkey = mkey;
     mr->umem = umem;
     mr->mkey = mkey_obj;
-    mr->vhca_id = 0;
-    SMARTNS_INFO("register mr %p: pd:%p, addr:%p, len:%lu, umem_id:%u, mkey:%u", mr, pd, addr, size, umem->umem_id, mkey);
+    mr->vhca_id = caps.vhca_id;
+    SMARTNS_TRACE("register mr %p: pd:%p, addr:%p, len:%lu, umem_id:%u, mkey:%u", mr, pd, addr, size, umem->umem_id, mkey);
     return mr;
 __destory_umem:
     mlx5dv_devx_umem_dereg(umem);
