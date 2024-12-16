@@ -85,7 +85,7 @@ int smartns_add_device(struct ib_device *dev) {
                 pr_err("%s: recv inlegal bf response %d\n", MODULE_NAME, response_size);
                 return -EIO;
             }
-            pr_info("%s: received bf response\n", MODULE_NAME);
+            pr_info("%s: TCP received bf response\n", MODULE_NAME);
             smartns_init_qp(&global_qp_handler, &response);
         } else {
             pr_err("%s: failed to receive bf response\n", MODULE_NAME);
