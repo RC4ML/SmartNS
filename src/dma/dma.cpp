@@ -16,7 +16,8 @@ ibv_qp *create_dma_qp(struct ibv_context *ibv_ctx,
         .recv_cq = rq_cq,
         .cap = qp_cap,
         .qp_type = IBV_QPT_RC,
-        .sq_sig_all = 1,
+        // don't sig all sq wqes
+        .sq_sig_all = 0,
 
         .comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS,
         .pd = pd,
