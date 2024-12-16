@@ -1,8 +1,5 @@
 #include "smartns_dv.h"
-#include "smartns_abi.h"
-#include "dma/dma.h"
 
-#include <fcntl.h>
 
 struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
     struct ibv_context *context = ibv_open_device(ib_dev);
@@ -32,7 +29,7 @@ struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
         return nullptr;
     }
 
-    struct SMARTNS_IOC_OPEN_DEVICE_PARAMS params;
+    struct SMARTNS_OPEN_DEVICE_PARAMS params;
     memset(&params, 0, sizeof(params));
     params.host_vhca_id = s_ctx->inner_host_mr->vhca_id;
     params.host_mkey = devx_mr_query_mkey(s_ctx->inner_host_mr);
@@ -55,37 +52,38 @@ struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
 
     void *bf_base_addr = params.bf_addr;
     size_t bf_total_size = params.bf_size;
+
     for (uint32_t i = 0;i < params.send_wq_number;i++) {
-        smartns_send_wq send_wq;
-        send_wq.send_wq_id = i;
-        send_wq.host_mr_lkey = s_ctx->inner_host_mr->lkey;
-        send_wq.bf_mr_lkey = s_ctx->inner_bf_mr->lkey;
+        smartns_send_wq *send_wq = new smartns_send_wq();
+        send_wq->send_wq_id = i;
+        send_wq->host_mr_lkey = s_ctx->inner_host_mr->lkey;
+        send_wq->bf_mr_lkey = s_ctx->inner_bf_mr->lkey;
 
-        send_wq.host_send_wq_buf = s_ctx->host_mr_allocator->alloc(params.send_wq_capacity * sizeof(smartns_send_wqe));
-        assert(send_wq.host_send_wq_buf != nullptr);
+        send_wq->host_send_wq_buf = s_ctx->host_mr_allocator->alloc(params.send_wq_capacity * sizeof(smartns_send_wqe));
+        assert(send_wq->host_send_wq_buf != nullptr);
 
-        send_wq.bf_send_wq_buf = bf_base_addr;
-        assert(send_wq.bf_send_wq_buf != nullptr);
-        bf_base_addr += params.send_wq_capacity * sizeof(smartns_send_wqe);
+        send_wq->bf_send_wq_buf = bf_base_addr;
+        assert(send_wq->bf_send_wq_buf != nullptr);
+        bf_base_addr = reinterpret_cast<void *>(reinterpret_cast<size_t>(bf_base_addr) + params.send_wq_capacity * sizeof(smartns_send_wqe));
         bf_total_size -= params.send_wq_capacity * sizeof(smartns_send_wqe);
 
-        send_wq.max_num = params.send_wq_capacity;
-        send_wq.cur_num = 0;
+        send_wq->max_num = params.send_wq_capacity;
+        send_wq->cur_num = 0;
 
-        send_wq.dma_wq.dma_send_cq = create_dma_cq(context, 128);
-        send_wq.dma_wq.dma_recv_cq = send_wq.dma_wq.dma_send_cq;
-        send_wq.dma_wq.start_index = 0;
-        send_wq.dma_wq.finish_index = 0;
-        send_wq.dma_wq.max_num = 128;
-        send_wq.dma_wq.dma_qp = create_dma_qp(context, pd, send_wq.dma_wq.dma_recv_cq, send_wq.dma_wq.dma_send_cq, 128);
-        init_dma_qp(send_wq.dma_wq.dma_qp);
-        dma_qp_self_connected(send_wq.dma_wq.dma_qp);
+        send_wq->dma_wq.dma_send_cq = create_dma_cq(context, 128);
+        send_wq->dma_wq.dma_recv_cq = send_wq->dma_wq.dma_send_cq;
+        send_wq->dma_wq.start_index = 0;
+        send_wq->dma_wq.finish_index = 0;
+        send_wq->dma_wq.max_num = 128;
+        send_wq->dma_wq.dma_qp = create_dma_qp(context, pd, send_wq->dma_wq.dma_recv_cq, send_wq->dma_wq.dma_send_cq, 128);
+        init_dma_qp(send_wq->dma_wq.dma_qp);
+        dma_qp_self_connected(send_wq->dma_wq.dma_qp);
 
-        send_wq.dma_wq.dma_qpx = ibv_qp_to_qp_ex(send_wq.dma_wq.dma_qp);
-        send_wq.dma_wq.dma_mqpx = mlx5dv_qp_ex_from_ibv_qp_ex(send_wq.dma_wq.dma_qpx);
-        send_wq.dma_wq.dma_mqpx->wr_memcpy_direct_init(send_wq.dma_wq.dma_mqpx);
+        send_wq->dma_wq.dma_qpx = ibv_qp_to_qp_ex(send_wq->dma_wq.dma_qp);
+        send_wq->dma_wq.dma_mqpx = mlx5dv_qp_ex_from_ibv_qp_ex(send_wq->dma_wq.dma_qpx);
+        send_wq->dma_wq.dma_mqpx->wr_memcpy_direct_init(send_wq->dma_wq.dma_mqpx);
 
-        s_ctx->send_wq_list.emplace_back(send_wq);
+        s_ctx->send_wq_list.push_back(send_wq);
     }
 
     s_ctx->bf_mr_allocator = new custom_allocator(bf_base_addr, bf_total_size);
@@ -96,7 +94,7 @@ struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
 int smartns_close_device(struct ibv_context *context) {
     struct smartns_context *s_ctx = reinterpret_cast<smartns_context *>(context);
 
-    struct SMARTNS_IOC_CLOSE_DEVICE_PARAMS params;
+    struct SMARTNS_CLOSE_DEVICE_PARAMS params;
     memset(&params, 0, sizeof(params));
     params.context_number = s_ctx->context_number;
 
@@ -119,9 +117,10 @@ int smartns_close_device(struct ibv_context *context) {
     }
 
     for (auto &send_wq : s_ctx->send_wq_list) {
-        ibv_destroy_qp(send_wq.dma_wq.dma_qp);
+        ibv_destroy_qp(send_wq->dma_wq.dma_qp);
         // don't need destory recv_cq because it's equal to send_cq
-        ibv_destroy_cq(send_wq.dma_wq.dma_send_cq);
+        ibv_destroy_cq(send_wq->dma_wq.dma_send_cq);
+        delete send_wq;
     }
 
     delete s_ctx->host_mr_allocator;
@@ -145,7 +144,7 @@ struct ibv_pd *smartns_alloc_pd(struct ibv_context *context) {
         return reinterpret_cast<ibv_pd *>(s_ctx->pd_list.begin()->second);
     }
 
-    struct SMARTNS_IOC_ALLOC_PD_PARAMS params;
+    struct SMARTNS_ALLOC_PD_PARAMS params;
     memset(&params, 0, sizeof(params));
     params.context_number = s_ctx->context_number;
 
@@ -173,19 +172,19 @@ int smartns_dealloc_pd(struct ibv_pd *pd) {
     struct smartns_pd *s_pd = reinterpret_cast<smartns_pd *>(pd);
     struct smartns_context *s_ctx = s_pd->context;
 
-    struct SMARTNS_DESTROY_PD_PARAMS params;
+    struct SMARTNS_DEALLOC_PD_PARAMS params;
     memset(&params, 0, sizeof(params));
     params.context_number = s_ctx->context_number;
     params.pd_number = s_pd->pd_number;
 
-    int retcode = ioctl(s_ctx->kernel_fd, SMARTNS_IOC_DESTROY_PD, &params);
+    int retcode = ioctl(s_ctx->kernel_fd, SMARTNS_IOC_DEALLOC_PD, &params);
     if (retcode < 0) {
-        fprintf(stderr, "Error, failed to ioctl SMARTNS_IOC_DESTROY_PD %d\n", retcode);
+        fprintf(stderr, "Error, failed to ioctl SMARTNS_IOC_DEALLOC_PD %d\n", retcode);
         return -1;
     }
 
     if (params.common_params.success == 0) {
-        fprintf(stderr, "Error, failed to exec ioctl SMARTNS_IOC_DESTROY_PD\n");
+        fprintf(stderr, "Error, failed to exec ioctl SMARTNS_IOC_DEALLOC_PD\n");
         return -1;
     }
 
@@ -201,14 +200,16 @@ struct ibv_mr *smartns_reg_mr(struct ibv_pd *pd, void *addr, size_t length, unsi
     struct smartns_context *s_ctx = s_pd->context;
 
     struct smartns_mr *s_mr = new smartns_mr();
-    s_mr->devx_mr = devx_reg_mr(s_ctx->inner_pd, addr, length, access);
-    assert(devx_mr_allow_other_vhca_access(s_mr->devx_mr, vhca_access_key, sizeof(vhca_access_key)) == 0);
+    s_mr->dev_mr = devx_reg_mr(s_ctx->inner_pd, addr, length, access);
+    assert(devx_mr_allow_other_vhca_access(s_mr->dev_mr, vhca_access_key, sizeof(vhca_access_key)) == 0);
 
-    struct SMARTNS_IOC_REG_MR_PARAMS params;
+    struct SMARTNS_REG_MR_PARAMS params;
     memset(&params, 0, sizeof(params));
 
-    params.host_vhca_id = s_mr->devx_mr->vhca_id;
-    params.host_mkey = devx_mr_query_mkey(s_mr->devx_mr);
+    params.context_number = s_ctx->context_number;
+    params.pd_number = s_pd->pd_number;
+    params.host_vhca_id = s_mr->dev_mr->vhca_id;
+    params.host_mkey = devx_mr_query_mkey(s_mr->dev_mr);
     params.host_size = length;
     params.host_addr = addr;
 
@@ -227,7 +228,7 @@ struct ibv_mr *smartns_reg_mr(struct ibv_pd *pd, void *addr, size_t length, unsi
     s_mr->mr.pd = reinterpret_cast<ibv_pd *>(s_pd);
     s_mr->mr.addr = addr;
     s_mr->mr.length = length;
-    s_mr->mr.handle = s_mr->devx_mr->handle;
+    s_mr->mr.handle = s_mr->dev_mr->handle;
     s_mr->mr.lkey = params.host_mkey;
     s_mr->mr.rkey = params.host_mkey;
 
@@ -243,7 +244,7 @@ int smartns_dereg_mr(struct ibv_mr *mr) {
 
     params.context_number = s_ctx->context_number;
     params.pd_number = reinterpret_cast<struct smartns_pd *>(s_mr->mr.pd)->pd_number;
-    params.lkey = s_mr->mr.lkey;
+    params.host_mkey = s_mr->mr.lkey;
 
     int retcode = ioctl(s_ctx->kernel_fd, SMARTNS_IOC_DESTROY_MR, &params);
     if (retcode < 0) {
@@ -256,7 +257,7 @@ int smartns_dereg_mr(struct ibv_mr *mr) {
         return -1;
     }
 
-    devx_dereg_mr(s_mr->devx_mr);
+    devx_dereg_mr(s_mr->dev_mr);
 
     delete s_mr;
 
@@ -275,7 +276,7 @@ struct ibv_cq *smartns_create_cq(struct ibv_context *context, int cqe, void *cq_
     assert(bf_cq_buf != nullptr);
     assert(bf_cq_doorbell != nullptr);
 
-    struct SMARTNS_IOC_CREATE_CQ_PARAMS params;
+    struct SMARTNS_CREATE_CQ_PARAMS params;
     memset(&params, 0, sizeof(params));
 
     params.context_number = s_ctx->context_number;
@@ -358,7 +359,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     assert(s_ctx->cq_list.count(recv_cq->cq_number) != 0);
 
     // use sq_sig_all as send_wq_id
-    assert(qp_init_attr->sq_sig_all < s_ctx->send_wq_list.size());
+    assert(static_cast<size_t>(qp_init_attr->sq_sig_all) < s_ctx->send_wq_list.size());
 
     uint32_t		max_send_wr = qp_init_attr->cap.max_send_wr;
     uint32_t		max_recv_wr = qp_init_attr->cap.max_recv_wr;
@@ -371,7 +372,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     void *host_recv_wq_addr = s_ctx->host_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
     void *bf_recv_wq_addr = s_ctx->bf_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
 
-    struct SMARTNS_IOC_CREATE_QP_PARAMS params;
+    struct SMARTNS_CREATE_QP_PARAMS params;
     memset(&params, 0, sizeof(params));
 
     params.context_number = s_ctx->context_number;
@@ -416,7 +417,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->send_cq = send_cq;
     s_qp->recv_cq = recv_cq;
 
-    s_qp->send_wq = &s_ctx->send_wq_list[qp_init_attr->sq_sig_all];
+    s_qp->send_wq = s_ctx->send_wq_list[qp_init_attr->sq_sig_all];
     s_qp->recv_wq = new smartns_recv_wq();
 
     s_qp->recv_wq->host_mr_lkey = s_ctx->inner_host_mr->lkey;
@@ -433,7 +434,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->recv_wq->dma_wq.finish_index = 0;
     s_qp->recv_wq->dma_wq.max_num = 128;
 
-    s_qp->recv_wq->dma_wq.dma_qp = create_dma_qp(s_ctx->context, s_pd->pd, s_qp->recv_wq->dma_wq.dma_recv_cq, s_qp->recv_wq->dma_wq.dma_send_cq, 128);
+    s_qp->recv_wq->dma_wq.dma_qp = create_dma_qp(s_ctx->context, s_ctx->inner_pd, s_qp->recv_wq->dma_wq.dma_recv_cq, s_qp->recv_wq->dma_wq.dma_send_cq, 128);
     init_dma_qp(s_qp->recv_wq->dma_wq.dma_qp);
     dma_qp_self_connected(s_qp->recv_wq->dma_wq.dma_qp);
 

@@ -2,44 +2,23 @@
 
 #include "common.hpp"
 #include "allocator.h"
-#include "devx_mr.h"
+#include "devx/devx_mr.h"
 #include "spinlock_mutex.h"
 #include "offset_handler.h"
 #include "phmap.h"
 #include "page.h"
+#include "smartns_abi.h"
+#include "dma/dma.h"
+
+#include <fcntl.h>
 #include <sys/ioctl.h>
 
 
-#define SMARTNS_CONTEXT_ALLOC_SIZE (8*1024*1024)
 static_assert(is_log2(SMARTNS_CONTEXT_ALLOC_SIZE));
 
-static uint8_t vhca_access_key[32] = {
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1
-};
-
-struct smartns_send_wqe {
-    char a[64];
-};
 static_assert(sizeof(smartns_send_wqe) == 64);
-
-struct smartns_recv_wqe {
-    char a[16];
-};
 static_assert(sizeof(smartns_recv_wqe) == 16);
-
-
-struct smartns_cqe {
-    char a[64];
-};
 static_assert(sizeof(smartns_cqe) == 64);
-
-struct smartns_cq_doorbell {
-    size_t consumer_index;
-    char padding[56];
-};
 static_assert(sizeof(smartns_cq_doorbell) == 64);
 
 struct smartns_dma_wq {
@@ -111,6 +90,7 @@ struct smartns_qp {
 
 // donothing for now
 struct smartns_pd {
+    // this pd is not been used!!
     struct ibv_pd *pd;
     // generate from bf
     size_t pd_number;
@@ -136,7 +116,7 @@ struct smartns_cq {
 
 struct smartns_mr {
     ibv_mr mr;
-    devx_mr *devx_mr;
+    devx_mr *dev_mr;
 };
 
 struct smartns_context {
@@ -156,7 +136,7 @@ struct smartns_context {
 
     size_t context_number;
 
-    std::vector<smartns_send_wq> send_wq_list;
+    std::vector<smartns_send_wq *> send_wq_list;
     // qpn to struct qp
     phmap::flat_hash_map<size_t, smartns_qp *>qp_list;
     // pdn to struct pd

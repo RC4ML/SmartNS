@@ -1,9 +1,36 @@
 #pragma once
 
 #include <asm-generic/ioctl.h>
-const char *smartnsinode = "/dev/smartns";
 
 #define SMARTNS_IOCTL 0x12
+
+#define SMARTNS_CONTEXT_ALLOC_SIZE (8*1024*1024)
+
+static __attribute__((unused)) const char *smartnsinode = "/dev/smartns";
+
+static __attribute__((unused)) uint8_t vhca_access_key[32] = {
+    1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1
+};
+
+struct smartns_send_wqe {
+    char a[64];
+};
+
+struct smartns_recv_wqe {
+    char a[16];
+};
+
+struct smartns_cqe {
+    char a[64];
+};
+
+struct smartns_cq_doorbell {
+    size_t consumer_index;
+    char padding[56];
+};
 
 struct SMARTNS_KERNEL_COMMON_PARAMS {
     int pid;
@@ -13,7 +40,7 @@ struct SMARTNS_KERNEL_COMMON_PARAMS {
     unsigned int success;
 };
 
-struct SMARTNS_IOC_OPEN_DEVICE_PARAMS {
+struct SMARTNS_OPEN_DEVICE_PARAMS {
     struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
     unsigned short int host_vhca_id;
     unsigned int host_mkey;
@@ -33,12 +60,12 @@ struct SMARTNS_IOC_OPEN_DEVICE_PARAMS {
     unsigned long int context_number;
 };
 
-struct SMARTNS_IOC_CLOSE_DEVICE_PARAMS {
+struct SMARTNS_CLOSE_DEVICE_PARAMS {
     struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
     unsigned long int context_number;
 };
 
-struct SMARTNS_IOC_ALLOC_PD_PARAMS {
+struct SMARTNS_ALLOC_PD_PARAMS {
     struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
     unsigned long int context_number;
 
@@ -46,15 +73,17 @@ struct SMARTNS_IOC_ALLOC_PD_PARAMS {
     unsigned long int pd_number;
 };
 
-struct SMARTNS_DESTROY_PD_PARAMS {
+struct SMARTNS_DEALLOC_PD_PARAMS {
     struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
     unsigned long int context_number;
     unsigned long int pd_number;
 };
 
 
-struct SMARTNS_IOC_REG_MR_PARAMS {
+struct SMARTNS_REG_MR_PARAMS {
     struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
+    unsigned long int context_number;
+    unsigned long int pd_number;
     unsigned short int host_vhca_id;
     unsigned int host_mkey;
     unsigned long int host_size;
@@ -65,11 +94,11 @@ struct SMARTNS_DESTROY_MR_PARAMS {
     struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
     unsigned long int context_number;
     unsigned long int pd_number;
-    unsigned int lkey;
+    unsigned int host_mkey;
 };
 
 
-struct SMARTNS_IOC_CREATE_CQ_PARAMS {
+struct SMARTNS_CREATE_CQ_PARAMS {
     struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
     unsigned long int context_number;
     unsigned int max_num;
@@ -88,7 +117,7 @@ struct SMARTNS_DESTROY_CQ_PARAMS {
     unsigned long int cq_number;
 };
 
-struct SMARTNS_IOC_CREATE_QP_PARAMS {
+struct SMARTNS_CREATE_QP_PARAMS {
     struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
     unsigned long int context_number;
     unsigned long int pd_number;
@@ -123,20 +152,15 @@ struct SMARTNS_DESTROY_QP_PARAMS {
     unsigned long int qp_number;
 };
 
+#define SMARTNS_IOC_OPEN_DEVICE _IOWR(SMARTNS_IOCTL, 1, struct SMARTNS_OPEN_DEVICE_PARAMS)
 
+#define SMARTNS_IOC_ALLOC_PD _IOWR(SMARTNS_IOCTL, 2, struct SMARTNS_ALLOC_PD_PARAMS)
 
+#define SMARTNS_IOC_REG_MR _IOWR(SMARTNS_IOCTL, 3, struct SMARTNS_REG_MR_PARAMS)
 
+#define SMARTNS_IOC_CREATE_CQ _IOWR(SMARTNS_IOCTL, 4, struct SMARTNS_CREATE_CQ_PARAMS)
 
-
-#define SMARTNS_IOC_OPEN_DEVICE _IOWR(SMARTNS_IOCTL, 1, struct SMARTNS_IOC_OPEN_DEVICE_PARAMS)
-
-#define SMARTNS_IOC_ALLOC_PD _IOWR(SMARTNS_IOCTL, 2, struct SMARTNS_IOC_ALLOC_PD_PARAMS)
-
-#define SMARTNS_IOC_REG_MR _IOWR(SMARTNS_IOCTL, 3, struct SMARTNS_IOC_REG_MR_PARAMS)
-
-#define SMARTNS_IOC_CREATE_CQ _IOWR(SMARTNS_IOCTL, 4, struct SMARTNS_IOC_CREATE_CQ_PARAMS)
-
-#define SMARTNS_IOC_CREATE_QP _IOWR(SMARTNS_IOCTL, 5, struct SMARTNS_IOC_CREATE_QP_PARAMS)
+#define SMARTNS_IOC_CREATE_QP _IOWR(SMARTNS_IOCTL, 5, struct SMARTNS_CREATE_QP_PARAMS)
 
 #define SMARTNS_IOC_MODIFY_QP _IOWR(SMARTNS_IOCTL, 6, struct SMARTNS_MODIFY_QP_PARAMS)
 
@@ -146,6 +170,6 @@ struct SMARTNS_DESTROY_QP_PARAMS {
 
 #define SMARTNS_IOC_DESTROY_MR _IOWR(SMARTNS_IOCTL, 9, struct SMARTNS_DESTROY_MR_PARAMS)
 
-#define SMARTNS_IOC_DESTROY_PD _IOWR(SMARTNS_IOCTL, 10, struct SMARTNS_DESTROY_PD_PARAMS)
+#define SMARTNS_IOC_DEALLOC_PD _IOWR(SMARTNS_IOCTL, 10, struct SMARTNS_DEALLOC_PD_PARAMS)
 
-#define SMARTNS_IOC_CLOSE_DEVICE _IOWR(SMARTNS_IOCTL, 11, struct SMARTNS_IOC_CLOSE_DEVICE_PARAMS)
+#define SMARTNS_IOC_CLOSE_DEVICE _IOWR(SMARTNS_IOCTL, 11, struct SMARTNS_CLOSE_DEVICE_PARAMS)

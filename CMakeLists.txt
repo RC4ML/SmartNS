@@ -71,6 +71,9 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 #include: utils
 include_directories(${CMAKE_SOURCE_DIR}/utils)
 
+#include 
+include_directories(${CMAKE_SOURCE_DIR}/lib)
+
 #sub-project: HdrHistogram
 include_directories(${CMAKE_SOURCE_DIR}/HdrHistogram_c/include)
 
@@ -78,7 +81,7 @@ include_directories(${CMAKE_SOURCE_DIR}/HdrHistogram_c/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/atomic_queue/include)
 
 # Common sub-projects: parallel_hashmap
-include_directories(${CMAKE_SOURCE_DIR}/third_party/parallel_hashmap/parallel_hashmap)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/parallel-hashmap/parallel_hashmap)
 
 
 option(HDR_HISTOGRAM_BUILD_PROGRAMS OFF)
@@ -106,13 +109,21 @@ set(DEVXSOURCES
 
 set(DPUSOURCES
     ${CMAKE_SOURCE_DIR}/src/dpu/main.cpp
-    ${CMAKE_SOURCE_DIR}/src/dpu/smartns.cpp
+    ${CMAKE_SOURCE_DIR}/src/dpu/datapath.cpp
+    ${CMAKE_SOURCE_DIR}/src/dpu/controlpath.cpp
     ${CMAKE_SOURCE_DIR}/src/dpu/config.cpp
 )
 
 set(LIBRARIES ${LIBRARIES} mlx5 ibverbs pthread numa gflags hdr_histogram_static minipcm_static)
 
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
 
 add_executable(smartns ${UTILSOURCES} ${DEVXSOURCES} ${DPUSOURCES})
-
 target_link_libraries(smartns ${LIBRARIES})
+
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+
+add_subdirectory(${CMAKE_SOURCE_DIR}/lib)
+add_subdirectory(${CMAKE_SOURCE_DIR}/test)
+
+endif ()
