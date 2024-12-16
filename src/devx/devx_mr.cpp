@@ -125,7 +125,7 @@ static struct mlx5dv_devx_obj *devx_create_alias_memory_region(struct ibv_contex
     // }
 
     *mkey = MLX5_GET(create_alias_obj_out, out, hdr.obj_id) << 8;
-    SMARTNS_INFO("create_alias_memory_region mkey %u, pdn:%u", *mkey, pdn);
+    SMARTNS_TRACE("create_alias_memory_region mkey %u, pdn:%u", *mkey, pdn);
     return mkey_obj;
 }
 

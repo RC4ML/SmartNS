@@ -1,16 +1,13 @@
 #include "smartns.h"
-#include "rdma_cm/libr.h"
 #include "numautil.h"
 #include "dma/dma.h"
 #include "raw_packet/raw_packet.h"
-
-std::atomic<bool> stop_flag = false;
 
 void datapath_manager::create_raw_packet_main_qp() {
     size_t rxq_size = SMARTNS_TX_RX_CORE;
     if (!is_log2(rxq_size)) {
         struct ibv_device_attr_ex attr;
-        assert(ibv_query_device_ex(all_rx_context, 0, &attr) == 0);
+        assert(ibv_query_device_ex(global_context, 0, &attr) == 0);
         rxq_size = attr.rss_caps.max_rwq_indirection_table_size;
         if (rxq_size < SMARTNS_TX_RX_CORE) {
             SMARTNS_ERROR("RSS table size is too small\n");
@@ -31,12 +28,12 @@ void datapath_manager::create_raw_packet_main_qp() {
     rwq_ind_table_init_attr.ind_tbl = wqs;
     rwq_ind_table_init_attr.comp_mask = 0;
 
-    assert(main_rwq_ind_table = ibv_create_rwq_ind_table(all_rx_context, &rwq_ind_table_init_attr));
+    assert(main_rwq_ind_table = ibv_create_rwq_ind_table(global_context, &rwq_ind_table_init_attr));
 
     delete[]wqs;
 
     assert(main_rss_qp == nullptr && main_flow == nullptr);
-    assert(all_rx_context != nullptr && all_rx_pd != nullptr);
+    assert(global_context != nullptr && global_pd != nullptr);
 
     struct ibv_qp_init_attr_ex qp_init_attr_ex;
     memset(&qp_init_attr_ex, 0, sizeof(qp_init_attr_ex));
@@ -45,7 +42,7 @@ void datapath_manager::create_raw_packet_main_qp() {
     qp_init_attr_ex.srq = nullptr;
     qp_init_attr_ex.cap.max_inline_data = 0;
     qp_init_attr_ex.qp_type = IBV_QPT_RAW_PACKET;
-    qp_init_attr_ex.pd = all_rx_pd;
+    qp_init_attr_ex.pd = global_pd;
     qp_init_attr_ex.create_flags = 0; //ibv_qp_create_flags 
     qp_init_attr_ex.rwq_ind_tbl = main_rwq_ind_table;
     qp_init_attr_ex.rx_hash_conf.rx_hash_function = IBV_RX_HASH_FUNC_TOEPLITZ;
@@ -56,12 +53,12 @@ void datapath_manager::create_raw_packet_main_qp() {
 
     qp_init_attr_ex.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_IND_TABLE | IBV_QP_INIT_ATTR_RX_HASH;
 
-    assert(main_rss_qp = ibv_create_qp_ex(all_rx_context, &qp_init_attr_ex));
+    assert(main_rss_qp = ibv_create_qp_ex(global_context, &qp_init_attr_ex));
 }
 
 void datapath_manager::create_main_flow() {
     assert(main_flow == nullptr);
-    assert(main_rss_qp != nullptr && all_rx_context != nullptr && all_rx_pd != nullptr);
+    assert(main_rss_qp != nullptr && global_context != nullptr && global_context != nullptr);
 
     size_t flow_attr_total_size = sizeof(ibv_flow_attr) + sizeof(ibv_flow_spec_eth) + sizeof(ibv_flow_spec_tcp_udp);
 
@@ -97,21 +94,16 @@ void datapath_manager::create_main_flow() {
     free(header_buff);
 }
 
-datapath_manager::datapath_manager(std::string device_name, size_t numa_node, bool is_server) {
-    this->device_name = device_name;
+datapath_manager::datapath_manager(ibv_context *all_context, ibv_pd *all_pd, size_t numa_node, bool is_server) {
     this->numa_node = numa_node;
     this->is_server = is_server;
 
-    struct ibv_device *ib_dev = ctx_find_dev(device_name.c_str());
-
-    all_rx_context = ctx_open_device(ib_dev);
+    global_context = all_context;
+    global_pd = all_pd;
 
     struct ibv_port_attr port_attr;
-    assert(ibv_query_port(all_rx_context, RDMA_IB_PORT, &port_attr) == 0);
+    assert(ibv_query_port(global_context, RDMA_IB_PORT, &port_attr) == 0);
     SMARTNS_INFO("%-20s : %d", "CUR MTU", 128 << (port_attr.active_mtu));
-
-    all_rx_pd = ibv_alloc_pd(all_rx_context);
-    assert(all_rx_pd != NULL);
 
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
         void *send_buf = SmartNS::get_huge_mem(numa_node, SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER);
@@ -128,14 +120,10 @@ datapath_manager::datapath_manager(std::string device_name, size_t numa_node, bo
     }
 
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
-        // important
-        ibv_context *tx_dma_context = ctx_open_device(ib_dev);
-        ibv_pd *tx_dma_pd = ibv_alloc_pd(tx_dma_context);
-        assert(tx_dma_pd != NULL);
 
-        txpath_handler *tx_handler = new txpath_handler(tx_dma_context, tx_dma_pd, txpath_send_buf_list[i], SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER);
-        rxpath_handler *rx_handler = new rxpath_handler(all_rx_context, all_rx_pd, rxpath_recv_buf_list[i], SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
-        dma_handler *dma_handler = new ::dma_handler(tx_dma_context, tx_dma_pd, rxpath_recv_buf_list[i], SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
+        txpath_handler *tx_handler = new txpath_handler(global_context, global_pd, txpath_send_buf_list[i], SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER);
+        rxpath_handler *rx_handler = new rxpath_handler(global_context, global_pd, rxpath_recv_buf_list[i], SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
+        dma_handler *dma_handler = new ::dma_handler(global_context, global_pd);
 
         datapath_handler_list.push_back({ i,i, dma_handler, tx_handler, rx_handler });
     }
@@ -177,17 +165,11 @@ datapath_manager::~datapath_manager() {
         SmartNS::free_huge_mem(txpath_send_buf_list[i]);
         SmartNS::free_huge_mem(rxpath_recv_buf_list[i]);
 
-        ibv_context *tx_context = datapath_handler_list[i].txpath_handler->context;
-        ibv_pd *tx_pd = datapath_handler_list[i].txpath_handler->pd;
         delete datapath_handler_list[i].txpath_handler;
         delete datapath_handler_list[i].rxpath_handler;
         delete datapath_handler_list[i].dma_handler;
-
-        ibv_dealloc_pd(tx_pd);
-        ibv_close_device(tx_context);
     }
-    ibv_dealloc_pd(all_rx_pd);
-    ibv_close_device(all_rx_context);
+    // free context and pd at control manager destructor
 }
 
 
@@ -333,14 +315,11 @@ rxpath_handler::~rxpath_handler() {
     ibv_dereg_mr(mr);
 }
 
-dma_handler::dma_handler(ibv_context *context, ibv_pd *pd, void *buf_addr, size_t recv_buf_size) {
+dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
     this->context = context;
     this->pd = pd;
 
-    assert(rxpath_recv_buf_mr = ibv_reg_mr(pd, buf_addr, recv_buf_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ
-        | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_HUGETLB | IBV_ACCESS_RELAXED_ORDERING));
     assert(dma_send_cq = create_dma_cq(context, 64 * SMARTNS_DMA_GROUP_SIZE));
-
     // use the same cq
     dma_recv_cq = dma_send_cq;
 
@@ -366,56 +345,5 @@ dma_handler::~dma_handler() {
         ibv_destroy_qp(dma_qp_list[i]);
     }
     ibv_destroy_cq(dma_send_cq);
-    ibv_dereg_mr(rxpath_recv_buf_mr);
 }
 
-controlpath_manager::controlpath_manager(std::string device_name, size_t numa_node, bool is_server) {
-    this->numa_node = numa_node;
-    this->is_server = is_server;
-    this->device_name = device_name;
-
-    control_rdma_param.device_name = device_name;
-    control_rdma_param.numa_node = numa_node;
-
-    roce_init(control_rdma_param, 1);
-
-    send_recv_buf_size = (control_tx_depth + control_rx_depth) * control_packet_size;
-    send_recv_buf = SmartNS::get_huge_mem(numa_node, send_recv_buf_size);
-    for (size_t j = 0;j < send_recv_buf_size / sizeof(size_t);j++) {
-        ((size_t *)send_recv_buf)[j] = 0;
-    }
-
-    control_qp_handler = create_qp_rc(control_rdma_param, send_recv_buf, send_recv_buf_size, &local_bf_info, 0);
-
-    assert(control_qp_handler);
-
-    for (size_t i = 0;i < 6;i++) {
-        local_bf_info.mac[i] = is_server ? server_mac[i] : client_mac[i];
-    }
-
-    send_handler.init(control_tx_depth, control_packet_size, 0);
-    send_comp_handler.init(control_tx_depth, control_packet_size, 0);
-    recv_handler.init(control_rx_depth, control_packet_size, control_tx_depth * control_packet_size);
-    recv_comp_handler.init(control_rx_depth, control_packet_size, control_tx_depth * control_packet_size);
-
-    control_net_param.isServer = true;
-    control_net_param.sock_port = SMARTNS_TCP_PORT;
-}
-
-controlpath_manager::~controlpath_manager() {
-    free(control_qp_handler->send_sge_list);
-    free(control_qp_handler->recv_sge_list);
-    free(control_qp_handler->send_wr);
-    free(control_qp_handler->recv_wr);
-
-    ibv_destroy_qp(control_qp_handler->qp);
-    ibv_dereg_mr(control_qp_handler->mr);
-    ibv_destroy_cq(control_qp_handler->send_cq);
-    ibv_destroy_cq(control_qp_handler->recv_cq);
-    ibv_dealloc_pd(control_qp_handler->pd);
-
-    ibv_close_device(control_rdma_param.contexts[0]);
-
-    SmartNS::free_huge_mem(send_recv_buf);
-    free(control_qp_handler);
-}
