@@ -15,19 +15,24 @@ static __attribute__((unused)) uint8_t vhca_access_key[32] = {
     1, 1, 1, 1, 1, 1, 1, 1
 };
 
-struct smartns_send_wqe {
+#define SMARTNS_RECV_WQE_OWNER_MASK 1
+
+struct __attribute__((packed)) smartns_send_wqe {
     char a[64];
 };
 
-struct smartns_recv_wqe {
-    char a[16];
+struct __attribute__((packed)) smartns_recv_wqe {
+    uint64_t addr;
+    uint32_t lkey;
+    uint32_t byte_count : 24;
+    uint8_t op_own : 8;
 };
 
-struct smartns_cqe {
+struct __attribute__((packed)) smartns_cqe {
     char a[64];
 };
 
-struct smartns_cq_doorbell {
+struct __attribute__((packed)) smartns_cq_doorbell {
     size_t consumer_index;
     char padding[56];
 };
@@ -88,6 +93,9 @@ struct SMARTNS_REG_MR_PARAMS {
     unsigned int host_mkey;
     unsigned long int host_size;
     void *host_addr;
+
+    // response
+    unsigned int bf_mkey;
 };
 
 struct SMARTNS_DESTROY_MR_PARAMS {

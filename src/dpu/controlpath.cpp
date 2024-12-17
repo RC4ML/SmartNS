@@ -68,6 +68,7 @@ void controlpath_manager::handle_open_device(SMARTNS_OPEN_DEVICE_PARAMS *param) 
 
     void *bf_mr_base = aligned_alloc(PAGE_SIZE, SMARTNS_CONTEXT_ALLOC_SIZE);
     assert(bf_mr_base);
+    memset(bf_mr_base, 0, SMARTNS_CONTEXT_ALLOC_SIZE);
 
     dpu_ctx->inner_bf_mr = devx_reg_mr(global_pd, bf_mr_base, SMARTNS_CONTEXT_ALLOC_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
     assert(devx_mr_allow_other_vhca_access(dpu_ctx->inner_bf_mr, vhca_access_key, sizeof(vhca_access_key)) == 0);
@@ -208,6 +209,7 @@ void controlpath_manager::handle_reg_mr(SMARTNS_REG_MR_PARAMS *param) {
 
     dpu_ctx->mr_list[mr->host_mkey] = mr;
 
+    param->bf_mkey = mr->devx_mr->lkey;
     param->common_params.success = 1;
     return;
 }
@@ -310,8 +312,13 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
     struct dpu_recv_wq *recv_wq = new dpu_recv_wq();
     recv_wq->dpu_ctx = dpu_ctx;
     recv_wq->bf_recv_wq_buf = param->bf_recv_wq_addr;
-    recv_wq->max_num = param->recv_wq_size / sizeof(smartns_recv_wqe);
-    recv_wq->cur_num = 0;
+
+    recv_wq->wqe_size = max_(1, param->max_recv_sge) * sizeof(smartns_recv_wqe);
+    recv_wq->wqe_cnt = param->max_recv_wr;
+    recv_wq->wqe_shift = std::log2(recv_wq->wqe_size);
+    recv_wq->max_sge = param->max_recv_sge;
+    recv_wq->head = 0;
+    recv_wq->own_flag = 1;
 
     dpu_qp *qp = new dpu_qp();
     qp->dpu_ctx = dpu_ctx;
@@ -330,7 +337,9 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
     qp->recv_wq = recv_wq;
 
     dpu_ctx->qp_list[qp->qp_number] = qp;
-    // TODO add qp to datapath
+
+    // add to special datapath
+    data_manager->datapath_handler_list[param->send_wq_id].local_qpn_to_qp_list[qp->qp_number] = qp;
 
     param->qp_number = qp->qp_number;
     param->common_params.success = 1;
@@ -356,7 +365,8 @@ void controlpath_manager::handle_destory_qp(SMARTNS_DESTROY_QP_PARAMS *param) {
         exit(1);
     }
 
-    // TODO del qp from datapath
+    // remove from special datapath
+    data_manager->datapath_handler_list[qp->send_wq->send_wq_id].local_qpn_to_qp_list.erase(param->qp_number);
 
     dpu_ctx->qp_list.erase(param->qp_number);
     delete qp;

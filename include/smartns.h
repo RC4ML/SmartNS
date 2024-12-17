@@ -12,6 +12,95 @@
 
 extern std::atomic<bool> stop_flag;
 
+struct alignas(64) dpu_send_wq {
+    struct dpu_context *dpu_ctx;
+    void *bf_send_wq_buf;
+    uint32_t max_num;
+    uint32_t cur_num;
+    size_t send_wq_id;
+};
+
+struct alignas(64) dpu_recv_wq {
+    struct dpu_context *dpu_ctx;
+    void *bf_recv_wq_buf;
+    uint32_t wqe_size;
+    uint32_t wqe_cnt;
+    uint32_t wqe_shift;
+    uint32_t max_sge;
+    uint32_t	head;
+    uint8_t own_flag;
+    inline smartns_recv_wqe *get_next_wqe() {
+        smartns_recv_wqe *wqe = reinterpret_cast<smartns_recv_wqe *>(reinterpret_cast<uint8_t *>(bf_recv_wq_buf) + (head << wqe_shift));
+        assert(wqe->op_own == own_flag);
+        head++;
+        if (head == wqe_cnt) {
+            head = 0;
+            own_flag = own_flag ^ SMARTNS_RECV_WQE_OWNER_MASK;
+        }
+        return wqe;
+    }
+};
+
+struct alignas(64) dpu_qp {
+    struct dpu_context *dpu_ctx;
+    struct dpu_pd *dpu_pd;
+    size_t qp_number;
+    size_t remote_qp_number;
+    ibv_qp_type qp_type;
+    unsigned int max_send_wr;
+    unsigned int max_recv_wr;
+    unsigned int max_send_sge;
+    unsigned int max_recv_sge;
+    unsigned int max_inline_data;
+
+    struct dpu_cq *send_cq;
+    struct dpu_cq *recv_cq;
+
+    struct dpu_send_wq *send_wq;
+    struct dpu_recv_wq *recv_wq;
+};
+
+struct dpu_pd {
+    struct dpu_context *dpu_ctx;
+    size_t pd_number;
+};
+
+struct alignas(64) dpu_cq {
+    struct dpu_context *dpu_ctx;
+    size_t cq_number;
+    uint32_t max_num;
+    uint32_t cur_num;
+    void *host_cq_buf;
+    void *host_cq_doorbell;
+    void *bf_cq_buf;
+    void *bf_cq_doorbell;
+};
+
+struct dpu_mr {
+    unsigned int host_mkey;
+    struct devx_mr *devx_mr;
+};
+
+struct dpu_context {
+    int host_pid;
+    int host_tgid;
+
+    size_t context_number;
+    struct devx_mr *inner_bf_mr;
+    struct devx_mr *inner_host_mr;
+
+    std::vector<dpu_send_wq> send_wq_list;
+
+    // pdn to struct pd
+    phmap::flat_hash_map<size_t, dpu_pd *>pd_list;
+    // cqn to struct cq
+    phmap::flat_hash_map<size_t, dpu_cq *>cq_list;
+    // qpn to struct qp
+    phmap::flat_hash_map<size_t, dpu_qp *>qp_list;
+    // host mkey to mr
+    phmap::flat_hash_map<unsigned int, dpu_mr *>mr_list;
+};
+
 class alignas(64) dma_handler {
 
 public:
@@ -103,6 +192,12 @@ public:
     ::dma_handler *dma_handler;
     ::txpath_handler *txpath_handler;
     ::rxpath_handler *rxpath_handler;
+    struct ibv_wc *wc_send_recv;
+
+    phmap::flat_hash_map<uint64_t, dpu_qp *>local_qpn_to_qp_list;
+    phmap::flat_hash_map<uint64_t, dpu_qp *>remote_qpn_to_qp_list;
+
+    size_t handle_recv();
 };
 
 class datapath_manager {
@@ -127,82 +222,6 @@ public:
 
     std::vector<void *>txpath_send_buf_list;
     std::vector<void *>rxpath_recv_buf_list;
-};
-
-
-struct alignas(64) dpu_send_wq {
-    struct dpu_context *dpu_ctx;
-    void *bf_send_wq_buf;
-    uint32_t max_num;
-    uint32_t cur_num;
-    size_t send_wq_id;
-};
-
-struct alignas(64) dpu_recv_wq {
-    struct dpu_context *dpu_ctx;
-    void *bf_recv_wq_buf;
-    uint32_t max_num;
-    uint32_t cur_num;
-};
-
-struct alignas(64) dpu_qp {
-    struct dpu_context *dpu_ctx;
-    struct dpu_pd *dpu_pd;
-    size_t qp_number;
-    size_t remote_qp_number;
-    ibv_qp_type qp_type;
-    unsigned int max_send_wr;
-    unsigned int max_recv_wr;
-    unsigned int max_send_sge;
-    unsigned int max_recv_sge;
-    unsigned int max_inline_data;
-
-    struct dpu_cq *send_cq;
-    struct dpu_cq *recv_cq;
-
-    struct dpu_send_wq *send_wq;
-    struct dpu_recv_wq *recv_wq;
-};
-
-struct dpu_pd {
-    struct dpu_context *dpu_ctx;
-    size_t pd_number;
-};
-
-struct alignas(64) dpu_cq {
-    struct dpu_context *dpu_ctx;
-    size_t cq_number;
-    uint32_t max_num;
-    uint32_t cur_num;
-    void *host_cq_buf;
-    void *host_cq_doorbell;
-    void *bf_cq_buf;
-    void *bf_cq_doorbell;
-};
-
-struct dpu_mr {
-    unsigned int host_mkey;
-    struct devx_mr *devx_mr;
-};
-
-struct dpu_context {
-    int host_pid;
-    int host_tgid;
-
-    size_t context_number;
-    struct devx_mr *inner_bf_mr;
-    struct devx_mr *inner_host_mr;
-
-    std::vector<dpu_send_wq> send_wq_list;
-
-    // pdn to struct pd
-    phmap::flat_hash_map<size_t, dpu_pd *>pd_list;
-    // cqn to struct cq
-    phmap::flat_hash_map<size_t, dpu_cq *>cq_list;
-    // qpn to struct qp
-    phmap::flat_hash_map<size_t, dpu_qp *>qp_list;
-    // host mkey to mr
-    phmap::flat_hash_map<unsigned int, dpu_mr *>mr_list;
 };
 
 class alignas(64) controlpath_manager {
@@ -254,4 +273,6 @@ public:
     offset_handler recv_comp_handler;
 
     tcp_param control_net_param;
+
+    datapath_manager *data_manager;
 };

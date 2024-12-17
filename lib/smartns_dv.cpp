@@ -18,6 +18,7 @@ struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
 
     s_ctx->host_mr_base = aligned_alloc(PAGE_SIZE, SMARTNS_CONTEXT_ALLOC_SIZE);
     assert(s_ctx->host_mr_base != nullptr);
+    memset(s_ctx->host_mr_base, 0, SMARTNS_CONTEXT_ALLOC_SIZE);
     // create devx mr
     s_ctx->host_mr_allocator = new custom_allocator(s_ctx->host_mr_base, SMARTNS_CONTEXT_ALLOC_SIZE);
     s_ctx->inner_host_mr = devx_reg_mr(pd, s_ctx->host_mr_base, SMARTNS_CONTEXT_ALLOC_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
@@ -231,6 +232,9 @@ struct ibv_mr *smartns_reg_mr(struct ibv_pd *pd, void *addr, size_t length, unsi
     s_mr->mr.handle = s_mr->dev_mr->handle;
     s_mr->mr.lkey = params.host_mkey;
     s_mr->mr.rkey = params.host_mkey;
+    s_mr->bf_mkey = params.bf_mkey;
+
+    s_ctx->mr_list[s_mr->mr.lkey] = s_mr;
 
     return reinterpret_cast<struct ibv_mr *>(s_mr);
 }
@@ -238,6 +242,11 @@ struct ibv_mr *smartns_reg_mr(struct ibv_pd *pd, void *addr, size_t length, unsi
 int smartns_dereg_mr(struct ibv_mr *mr) {
     struct smartns_mr *s_mr = reinterpret_cast<smartns_mr *>(mr);
     struct smartns_context *s_ctx = reinterpret_cast<struct smartns_context *>(s_mr->mr.context);
+
+    if (s_ctx->mr_list.count(s_mr->mr.lkey) == 0) {
+        fprintf(stderr, "Error, mr %u not found\n", s_mr->mr.lkey);
+        return -1;
+    }
 
     struct SMARTNS_DESTROY_MR_PARAMS params;
     memset(&params, 0, sizeof(params));
@@ -258,6 +267,8 @@ int smartns_dereg_mr(struct ibv_mr *mr) {
     }
 
     devx_dereg_mr(s_mr->dev_mr);
+
+    s_ctx->mr_list.erase(s_mr->mr.lkey);
 
     delete s_mr;
 
@@ -368,7 +379,11 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     uint32_t		max_inline_data = qp_init_attr->cap.max_inline_data;
     enum ibv_qp_type	qp_type = qp_init_attr->qp_type;
 
-    size_t recv_wq_size = max_recv_sge * max_recv_wr * sizeof(struct smartns_recv_wqe);
+    uint32_t recv_wqe_size = max_(1, max_recv_sge) * sizeof(smartns_recv_wqe);
+    recv_wqe_size = round_up(recv_wqe_size, 2);
+
+    uint32_t recv_wq_size = round_up(max_recv_wr, 2) * recv_wqe_size;
+
     void *host_recv_wq_addr = s_ctx->host_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
     void *bf_recv_wq_addr = s_ctx->bf_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
 
@@ -384,9 +399,9 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     params.send_cq_number = send_cq->cq_number;
     params.recv_cq_number = recv_cq->cq_number;
     params.max_send_wr = max_send_wr;
-    params.max_recv_wr = max_recv_wr;
+    params.max_recv_wr = round_up(max_recv_wr, 2);
     params.max_send_sge = max_send_sge;
-    params.max_recv_sge = max_recv_sge;
+    params.max_recv_sge = recv_wqe_size / sizeof(smartns_recv_wqe);
     params.max_inline_data = max_inline_data;
     params.qp_type = qp_type;
 
@@ -407,9 +422,9 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->pd = s_pd;
     s_qp->qp_number = params.qp_number;
     s_qp->max_send_wr = max_send_wr;
-    s_qp->max_recv_wr = max_recv_wr;
+    s_qp->max_recv_wr = round_up(max_recv_wr, 2);
     s_qp->max_send_sge = max_send_sge;
-    s_qp->max_recv_sge = max_recv_sge;
+    s_qp->max_recv_sge = recv_wqe_size / sizeof(smartns_recv_wqe);
     s_qp->max_inline_data = max_inline_data;
     s_qp->qp_type = qp_type;
     s_qp->cur_qp_state = IBV_QPS_RESET;
@@ -424,9 +439,15 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->recv_wq->bf_mr_lkey = s_ctx->inner_bf_mr->lkey;
     s_qp->recv_wq->host_recv_wq_buf = host_recv_wq_addr;
     s_qp->recv_wq->bf_recv_wq_buf = bf_recv_wq_addr;
-    s_qp->recv_wq->max_num = max_recv_wr;
-    s_qp->recv_wq->max_sge = max_recv_sge;
-    s_qp->recv_wq->cur_num = 0;
+
+    s_qp->recv_wq->wqe_size = recv_wqe_size;
+    s_qp->recv_wq->wqe_cnt = round_up(max_recv_wr, 2);
+    s_qp->recv_wq->wqe_shift = std::log2(recv_wqe_size);
+    s_qp->recv_wq->max_sge = max_(1, max_recv_sge);
+    s_qp->recv_wq->head = 0;
+    s_qp->recv_wq->tail = 0;
+    s_qp->recv_wq->own_flag = 1;
+    s_qp->recv_wq->wrid = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t) * s_qp->recv_wq->wqe_cnt));
 
     s_qp->recv_wq->dma_wq.dma_send_cq = create_dma_cq(s_ctx->context, 128);
     s_qp->recv_wq->dma_wq.dma_recv_cq = s_qp->recv_wq->dma_wq.dma_send_cq;
@@ -478,6 +499,7 @@ int smartns_destroy_qp(struct ibv_qp *qp) {
 
     s_ctx->host_mr_allocator->free(s_qp->recv_wq->host_recv_wq_buf);
     s_ctx->bf_mr_allocator->free(s_qp->recv_wq->bf_recv_wq_buf);
+    free(s_qp->recv_wq->wrid);
 
     ibv_destroy_qp(s_qp->recv_wq->dma_wq.dma_qp);
     ibv_destroy_cq(s_qp->recv_wq->dma_wq.dma_send_cq);
@@ -487,3 +509,65 @@ int smartns_destroy_qp(struct ibv_qp *qp) {
     return 0;
 }
 
+int smartns_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv_wr **bad_wr) {
+    struct smartns_qp *s_qp = reinterpret_cast<smartns_qp *>(qp);
+
+    struct smartns_recv_wqe *scat;
+    int nreq;
+    int ind;
+    int begin_indx;
+    int i, j;
+
+    s_qp->recv_wq->lock.lock();
+    ind = s_qp->recv_wq->head & (s_qp->recv_wq->wqe_cnt - 1);
+    begin_indx = ind;
+
+    for (nreq = 0;wr;++nreq, wr = wr->next) {
+        if (unlikely(s_qp->recv_wq->head - s_qp->recv_wq->tail + nreq >= s_qp->recv_wq->wqe_cnt)) {
+            fprintf(stderr, "Error, post recv wq full\n");
+            exit(1);
+        }
+        if (unlikely(static_cast<uint32_t>(wr->num_sge) > s_qp->max_recv_sge)) {
+            fprintf(stderr, "Error, post recv sge too many\n");
+            exit(1);
+        }
+
+        scat = reinterpret_cast<struct smartns_recv_wqe *>(reinterpret_cast<uint8_t *>(s_qp->recv_wq->host_recv_wq_buf) + (ind << s_qp->recv_wq->wqe_shift));
+        for (i = 0, j = 0;i < wr->num_sge;++i) {
+            scat[j].addr = wr->sg_list[i].addr;
+
+            assert(s_qp->context->mr_list.count(wr->sg_list[i].lkey));
+            scat[j].lkey = s_qp->context->mr_list[wr->sg_list[i].lkey]->bf_mkey;
+            scat[j].byte_count = wr->sg_list[i].length;
+            scat[j].op_own = s_qp->recv_wq->own_flag;
+            j++;
+        }
+        if (static_cast<uint32_t>(j) < s_qp->recv_wq->max_sge) {
+            scat[j].addr = 0;
+            scat[j].lkey = 100;
+            scat[j].byte_count = 0;
+            scat[j].op_own = s_qp->recv_wq->own_flag;
+        }
+
+        s_qp->recv_wq->wrid[ind] = wr->wr_id;
+
+        ind++;
+        if (static_cast<uint32_t>(ind) == s_qp->recv_wq->wqe_cnt) {
+            s_qp->recv_wq->dma_wq.post_dma_req(s_qp->recv_wq->bf_mr_lkey, reinterpret_cast<uint64_t>(s_qp->recv_wq->bf_recv_wq_buf) + (begin_indx << s_qp->recv_wq->wqe_shift),
+                s_qp->recv_wq->host_mr_lkey, reinterpret_cast<uint64_t>(s_qp->recv_wq->host_recv_wq_buf) + (begin_indx << s_qp->recv_wq->wqe_shift), (ind - begin_indx) * s_qp->recv_wq->wqe_size);
+            ind = 0;
+            begin_indx = 0;
+            s_qp->recv_wq->own_flag = s_qp->recv_wq->own_flag ^ SMARTNS_RECV_WQE_OWNER_MASK;
+        }
+    }
+    if (nreq) {
+        s_qp->recv_wq->head += nreq;
+        if (ind - begin_indx > 0) {
+            s_qp->recv_wq->dma_wq.post_dma_req(s_qp->recv_wq->bf_mr_lkey, reinterpret_cast<uint64_t>(s_qp->recv_wq->bf_recv_wq_buf) + (begin_indx << s_qp->recv_wq->wqe_shift),
+                s_qp->recv_wq->host_mr_lkey, reinterpret_cast<uint64_t>(s_qp->recv_wq->host_recv_wq_buf) + (begin_indx << s_qp->recv_wq->wqe_shift), (ind - begin_indx) * s_qp->recv_wq->wqe_size);
+        }
+    }
+
+    s_qp->recv_wq->lock.unlock();
+    return 0;
+}

@@ -124,8 +124,8 @@ datapath_manager::datapath_manager(ibv_context *all_context, ibv_pd *all_pd, siz
         txpath_handler *tx_handler = new txpath_handler(global_context, global_pd, txpath_send_buf_list[i], SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER);
         rxpath_handler *rx_handler = new rxpath_handler(global_context, global_pd, rxpath_recv_buf_list[i], SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
         dma_handler *dma_handler = new ::dma_handler(global_context, global_pd);
-
-        datapath_handler_list.push_back({ i,i, dma_handler, tx_handler, rx_handler });
+        struct ibv_wc *wc_send_recv = new ibv_wc[CTX_POLL_BATCH];
+        datapath_handler_list.push_back({ i,i, dma_handler, tx_handler, rx_handler,wc_send_recv });
     }
 
     create_raw_packet_main_qp();
@@ -168,6 +168,7 @@ datapath_manager::~datapath_manager() {
         delete datapath_handler_list[i].txpath_handler;
         delete datapath_handler_list[i].rxpath_handler;
         delete datapath_handler_list[i].dma_handler;
+        delete[]datapath_handler_list[i].wc_send_recv;
     }
     // free context and pd at control manager destructor
 }
@@ -324,7 +325,7 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
     dma_recv_cq = dma_send_cq;
 
     for (size_t i = 0;i < SMARTNS_DMA_GROUP_SIZE;i++) {
-        ibv_qp *dma_qp = create_dma_qp(context, pd, dma_recv_cq, dma_send_cq, 64);
+        ibv_qp *dma_qp = create_dma_qp(context, pd, dma_recv_cq, dma_send_cq, 128);
         init_dma_qp(dma_qp);
         dma_qp_self_connected(dma_qp);
 
@@ -347,3 +348,43 @@ dma_handler::~dma_handler() {
     ibv_destroy_cq(dma_send_cq);
 }
 
+size_t datapath_handler::handle_recv() {
+    int recv = ibv_poll_cq(rxpath_handler->recv_cq, CTX_POLL_BATCH, wc_send_recv);
+
+    for (int i = 0;i < recv;i++) {
+        if (wc_send_recv[i].status != IBV_WC_SUCCESS || wc_send_recv[i].opcode != IBV_WC_RECV) {
+            SMARTNS_ERROR("Recv error %d\n", wc_send_recv[i].status);
+            exit(1);
+        }
+
+        udp_packet *packet = reinterpret_cast<udp_packet *>(wc_send_recv[i].wr_id);
+        printf("Recv packet %d\n", wc_send_recv[i].byte_len);
+
+        dpu_qp *qp = local_qpn_to_qp_list[0];
+        assert(qp);
+
+        smartns_recv_wqe *recv_wqe = qp->recv_wq->get_next_wqe();
+        printf("recv wqe addr 0X%lx lkey %u byte count %u\n", recv_wqe->addr, recv_wqe->lkey, recv_wqe->byte_count);
+
+        // this step should afer dma cq
+        rxpath_handler->recv_comp_offset_handler.step();
+    }
+
+    // must after do dma ops
+    if (rxpath_handler->recv_comp_offset_handler.index() % SMARTNS_RX_BATCH == SMARTNS_RX_BATCH - 1) {
+        for (int i = 0;i < SMARTNS_RX_BATCH;i++) {
+            rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].addr = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
+            rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].length = SMARTNS_RX_PACKET_BUFFER;
+            rxpath_handler->recv_wr[i].wr_id = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
+            rxpath_handler->recv_wr[i].next = nullptr;
+
+            if (i > 0) {
+                rxpath_handler->recv_wr[i - 1].next = rxpath_handler->recv_wr + i;
+            }
+            rxpath_handler->recv_offset_handler.step();
+        }
+        assert(ibv_post_wq_recv(rxpath_handler->recv_wq, rxpath_handler->recv_wr, &rxpath_handler->recv_bad_wr) == 0);
+    }
+
+    return recv;
+}

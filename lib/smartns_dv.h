@@ -28,9 +28,24 @@ struct smartns_dma_wq {
     uint32_t start_index;
     uint32_t finish_index;
     uint32_t max_num;
-
+    ibv_wc wc[16];
     ibv_cq *dma_send_cq;
     ibv_cq *dma_recv_cq;
+
+    inline void post_dma_req(uint32_t dest_lkey, uint64_t dest_addr,
+        uint32_t src_lkey, uint64_t src_addr, size_t length) {
+        assert(start_index - finish_index < max_num);
+        dma_qpx->wr_id = start_index;
+        dma_qpx->wr_flags = (start_index % 16) == 0 ? IBV_SEND_SIGNALED : 0;
+        dma_mqpx->wr_memcpy_direct(dma_mqpx, dest_lkey, dest_addr, src_lkey, src_addr, length);
+        start_index++;
+
+        uint32_t num_wc = ibv_poll_cq(dma_send_cq, 1, wc);
+        for (uint32_t i = 0; i < num_wc; i++) {
+            assert(wc[i].status == IBV_WC_SUCCESS);
+            finish_index++;
+        }
+    }
 };
 
 struct alignas(64) smartns_send_wq {
@@ -54,10 +69,16 @@ struct alignas(64) smartns_recv_wq {
 
     void *host_recv_wq_buf;
     void *bf_recv_wq_buf;
+    uint64_t *wrid;
 
-    uint32_t max_num;
+    uint32_t wqe_size;
+    uint32_t wqe_cnt;
+    uint32_t wqe_shift;
     uint32_t max_sge;
-    uint32_t cur_num;
+    uint32_t	head;
+    uint32_t	tail;
+
+    uint8_t own_flag;
 
     struct smartns_dma_wq dma_wq;
     spinlock_mutex lock;
@@ -117,6 +138,7 @@ struct smartns_cq {
 struct smartns_mr {
     ibv_mr mr;
     devx_mr *dev_mr;
+    uint32_t bf_mkey;
 };
 
 struct smartns_context {
@@ -143,6 +165,8 @@ struct smartns_context {
     phmap::flat_hash_map<size_t, smartns_pd *>pd_list;
     // cqn to struct cq
     phmap::flat_hash_map<size_t, smartns_cq *>cq_list;
+    // host mkey to mr
+    phmap::flat_hash_map<unsigned int, smartns_mr *>mr_list;
 };
 
 struct ibv_context *smartns_open_device(struct ibv_device *ib_dev);
@@ -172,8 +196,5 @@ int smartns_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send
 int smartns_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv_wr **bad_wr);
 
 int smartns_poll_cq(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc);
-
-
-
 
 

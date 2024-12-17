@@ -9,12 +9,43 @@ void ctrl_c_handler(int) { stop_flag = true; }
 
 void client_datapath(datapath_handler *handler) {
     SmartNS::wait_scheduling(FLAGS_numaNode, handler->cpu_id);
+    if (handler->thread_id != 0) {
+        return;
+    }
+    for (size_t i = 0;i < SMARTNS_TX_BATCH;i++) {
+        handler->txpath_handler->send_sge_list[i * SMARTNS_TX_SEG].addr = handler->txpath_handler->send_offset_handler.offset() + handler->txpath_handler->send_buf_addr;
+        handler->txpath_handler->send_sge_list[i * SMARTNS_TX_SEG].length = SMARTNS_TX_PACKET_BUFFER;
+        handler->txpath_handler->send_wr[i].num_sge = 1;
+        handler->txpath_handler->send_wr[i].sg_list = handler->txpath_handler->send_sge_list + i * SMARTNS_TX_SEG;
+        handler->txpath_handler->send_wr[i].wr_id = handler->txpath_handler->send_offset_handler.offset() + handler->txpath_handler->send_buf_addr;
+        handler->txpath_handler->send_wr[i].send_flags = IBV_SEND_SIGNALED;
+        if (i > 0) {
+            handler->txpath_handler->send_wr[i - 1].next = &handler->txpath_handler->send_wr[i];
+        }
+        handler->txpath_handler->send_offset_handler.step();
+    }
+    assert(ibv_post_send(handler->txpath_handler->send_qp, handler->txpath_handler->send_wr, &handler->txpath_handler->send_bad_wr) == 0);
+
+    struct ibv_wc *wc_send = NULL;
+    ALLOCATE(wc_send, struct ibv_wc, CTX_POLL_BATCH);
+
+    while (!stop_flag) {
+        int ne_send = ibv_poll_cq(handler->txpath_handler->send_cq, CTX_POLL_BATCH, wc_send);
+        for (int i = 0;i < ne_send;i++) {
+            assert(wc_send[i].status == IBV_WC_SUCCESS);
+            printf("thread %ld send comp %u\n", handler->thread_id, wc_send[i].byte_len);
+        }
+    }
+
     return;
 }
 
 void server_datapath(datapath_handler *handler) {
     SmartNS::wait_scheduling(FLAGS_numaNode, handler->cpu_id);
 
+    while (!stop_flag) {
+        handler->handle_recv();
+    }
     return;
 }
 
@@ -127,6 +158,9 @@ int main(int argc, char *argv[]) {
 
     datapath_manager *data_manager = new datapath_manager(control_manager->control_rdma_param.contexts[0], control_manager->control_qp_handler->pd, FLAGS_numaNode, FLAGS_is_server);
 
+    // add datamanager to control manager for qp initial
+    control_manager->data_manager = data_manager;
+
     size_t num_threads = SMARTNS_TX_RX_CORE + SMARTNS_CONTROL_CORE;
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
@@ -146,12 +180,14 @@ int main(int argc, char *argv[]) {
     }
 
     control_manager->cpu_id = now_cpu_id;
-    threads.emplace_back(std::thread(host_controlpath, control_manager));
-    SmartNS::bind_to_core(threads[SMARTNS_TX_RX_CORE], FLAGS_numaNode, now_cpu_id);
+    if (FLAGS_is_server) {
+        threads.emplace_back(std::thread(host_controlpath, control_manager));
+        SmartNS::bind_to_core(threads[SMARTNS_TX_RX_CORE], FLAGS_numaNode, now_cpu_id);
+    }
 
     now_cpu_id++;
 
-    for (size_t i = 0;i < num_threads;i++) {
+    for (size_t i = 0;i < threads.size();i++) {
         threads[i].join();
     }
 
