@@ -21,7 +21,7 @@ int main() {
     qp_init_attr.qp_type = IBV_QPT_RC;
     qp_init_attr.send_cq = send_cq;
     qp_init_attr.recv_cq = recv_cq;
-    qp_init_attr.sq_sig_all = 1;
+    qp_init_attr.sq_sig_all = 0;
     qp_init_attr.cap.max_send_wr = 256;
     qp_init_attr.cap.max_recv_wr = 256;
     qp_init_attr.cap.max_send_wr = 1;
@@ -30,6 +30,24 @@ int main() {
 
     struct ibv_qp *qp = smartns_create_qp(pd, &qp_init_attr);
     assert(qp);
+
+    for (size_t i = 0;i < 256;i++) {
+        struct ibv_recv_wr wr;
+        struct ibv_sge sge;
+        wr.wr_id = 1;
+        wr.next = nullptr;
+        wr.sg_list = &sge;
+        wr.num_sge = 1;
+
+        sge.addr = reinterpret_cast<uint64_t>(addr) + i * 4096;
+        sge.length = 4096;
+        sge.lkey = mr->lkey;
+
+        struct ibv_recv_wr *bad_wr;
+        assert(smartns_post_recv(qp, &wr, &bad_wr) == 0);
+    }
+
+    sleep(100);
 
     assert(smartns_destroy_qp(qp) == 0);
 
