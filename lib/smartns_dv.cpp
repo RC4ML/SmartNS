@@ -278,6 +278,7 @@ int smartns_dereg_mr(struct ibv_mr *mr) {
 struct ibv_cq *smartns_create_cq(struct ibv_context *context, int cqe, void *cq_context, struct ibv_comp_channel *channel, int comp_vector) {
     struct smartns_context *s_ctx = reinterpret_cast<smartns_context *>(context);
 
+    cqe = std::bit_ceil(static_cast<uint32_t>(cqe));
     void *host_cq_buf = s_ctx->host_mr_allocator->alloc(cqe * sizeof(struct smartns_cqe), PAGE_SIZE);
     void *host_cq_doorbell = s_ctx->host_mr_allocator->alloc(sizeof(struct smartns_cq_doorbell), sizeof(struct smartns_cq_doorbell));
     void *bf_cq_buf = s_ctx->bf_mr_allocator->alloc(cqe * sizeof(struct smartns_cqe), PAGE_SIZE);
@@ -316,8 +317,12 @@ struct ibv_cq *smartns_create_cq(struct ibv_context *context, int cqe, void *cq_
     s_cq->host_cq_doorbell = reinterpret_cast<smartns_cq_doorbell *>(host_cq_doorbell);
     s_cq->bf_cq_buf = bf_cq_buf;
     s_cq->bf_cq_doorbell = reinterpret_cast<smartns_cq_doorbell *>(bf_cq_doorbell);
-    s_cq->max_num = cqe;
-    s_cq->cur_num = 0;
+
+    s_cq->wqe_size = sizeof(struct smartns_cqe);
+    s_cq->wqe_cnt = cqe;
+    s_cq->wqe_shift = std::log2(s_cq->wqe_size);
+    s_cq->head = 0;
+    s_cq->own_flag = 1;
 
     s_ctx->cq_list[params.cq_number] = s_cq;
 
@@ -380,9 +385,9 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     enum ibv_qp_type	qp_type = qp_init_attr->qp_type;
 
     uint32_t recv_wqe_size = max_(1, max_recv_sge) * sizeof(smartns_recv_wqe);
-    recv_wqe_size = round_up(recv_wqe_size, 2);
+    recv_wqe_size = std::bit_ceil(recv_wqe_size);
 
-    uint32_t recv_wq_size = round_up(max_recv_wr, 2) * recv_wqe_size;
+    uint32_t recv_wq_size = std::bit_ceil(max_recv_wr) * recv_wqe_size;
 
     void *host_recv_wq_addr = s_ctx->host_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
     void *bf_recv_wq_addr = s_ctx->bf_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
@@ -399,7 +404,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     params.send_cq_number = send_cq->cq_number;
     params.recv_cq_number = recv_cq->cq_number;
     params.max_send_wr = max_send_wr;
-    params.max_recv_wr = round_up(max_recv_wr, 2);
+    params.max_recv_wr = std::bit_ceil(max_recv_wr);
     params.max_send_sge = max_send_sge;
     params.max_recv_sge = recv_wqe_size / sizeof(smartns_recv_wqe);
     params.max_inline_data = max_inline_data;
@@ -422,7 +427,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->pd = s_pd;
     s_qp->qp_number = params.qp_number;
     s_qp->max_send_wr = max_send_wr;
-    s_qp->max_recv_wr = round_up(max_recv_wr, 2);
+    s_qp->max_recv_wr = std::bit_ceil(max_recv_wr);
     s_qp->max_send_sge = max_send_sge;
     s_qp->max_recv_sge = recv_wqe_size / sizeof(smartns_recv_wqe);
     s_qp->max_inline_data = max_inline_data;
@@ -441,7 +446,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->recv_wq->bf_recv_wq_buf = bf_recv_wq_addr;
 
     s_qp->recv_wq->wqe_size = recv_wqe_size;
-    s_qp->recv_wq->wqe_cnt = round_up(max_recv_wr, 2);
+    s_qp->recv_wq->wqe_cnt = std::bit_ceil(max_recv_wr);
     s_qp->recv_wq->wqe_shift = std::log2(recv_wqe_size);
     s_qp->recv_wq->max_sge = max_(1, max_recv_sge);
     s_qp->recv_wq->head = 0;
@@ -570,4 +575,55 @@ int smartns_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv
 
     s_qp->recv_wq->lock.unlock();
     return 0;
+}
+
+int smartns_poll_cq(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc) {
+    struct smartns_cq *s_cq = reinterpret_cast<smartns_cq *>(cq);
+    struct smartns_context *s_ctx = s_cq->context;
+
+    int npolled;
+
+    s_cq->lock.lock();
+
+    for (npolled = 0; npolled < num_entries;npolled++) {
+        struct smartns_cqe *cqe = reinterpret_cast<struct smartns_cqe *>(reinterpret_cast<uint8_t *>(s_cq->host_cq_buf) + (s_cq->head & (s_cq->wqe_cnt - 1)) * s_cq->wqe_size);
+        if (cqe->op_own != s_cq->own_flag) {
+            break;
+        }
+        switch (cqe->cq_opcode) {
+        case MLX5_CQE_REQ:
+            // TODO add send cq handler
+            break;
+
+        case MLX5_CQE_RESP_SEND: {
+            struct smartns_qp *qp = s_ctx->qp_list[cqe->qpn];
+            assert(qp);
+
+            wc->byte_len = cqe->byte_count;
+            wc->opcode = IBV_WC_RECV;
+            wc->wc_flags = 0;
+
+            uint16_t wqe_ctr = cqe->wqe_counter & (qp->recv_wq->wqe_cnt - 1);
+            wc->wr_id = qp->recv_wq->wrid[wqe_ctr];
+            wc->status = IBV_WC_SUCCESS;
+            qp->recv_wq->tail++;
+            break;
+        }
+
+        default:
+            fprintf(stderr, "Not support %u cq opcode now!\n", cqe->cq_opcode);
+            exit(1);
+            break;
+        }
+
+        s_cq->head++;
+        if (s_cq->head % s_cq->wqe_cnt == 0) {
+            s_cq->own_flag = s_cq->own_flag ^ SMARTNS_CQE_OWNER_MASK;
+        }
+    }
+    s_cq->host_cq_doorbell->consumer_index = s_cq->head;
+
+    s_cq->lock.unlock();
+
+    return npolled;
 }

@@ -17,6 +17,8 @@ static __attribute__((unused)) uint8_t vhca_access_key[32] = {
 
 #define SMARTNS_RECV_WQE_OWNER_MASK 1
 
+#define SMARTNS_CQE_OWNER_MASK 1
+
 struct __attribute__((packed)) smartns_send_wqe {
     char a[64];
 };
@@ -29,7 +31,13 @@ struct __attribute__((packed)) smartns_recv_wqe {
 };
 
 struct __attribute__((packed)) smartns_cqe {
-    char a[64];
+    uint64_t qpn;
+    uint32_t byte_count;
+    uint16_t wqe_counter;
+    uint16_t mlx5_opcode;
+    uint8_t cq_opcode;
+    uint8_t op_own;
+    uint8_t reserved[46];
 };
 
 struct __attribute__((packed)) smartns_cq_doorbell {

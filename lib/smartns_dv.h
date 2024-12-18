@@ -22,6 +22,7 @@ static_assert(sizeof(smartns_cqe) == 64);
 static_assert(sizeof(smartns_cq_doorbell) == 64);
 
 struct smartns_dma_wq {
+    const size_t dma_batch_size = 16;
     struct ibv_qp *dma_qp;
     struct ibv_qp_ex *dma_qpx;
     struct mlx5dv_qp_ex *dma_mqpx;
@@ -36,14 +37,14 @@ struct smartns_dma_wq {
         uint32_t src_lkey, uint64_t src_addr, size_t length) {
         assert(start_index - finish_index < max_num);
         dma_qpx->wr_id = start_index;
-        dma_qpx->wr_flags = (start_index % 16) == 0 ? IBV_SEND_SIGNALED : 0;
+        dma_qpx->wr_flags = (start_index % dma_batch_size) == (dma_batch_size - 1) ? IBV_SEND_SIGNALED : 0;
         dma_mqpx->wr_memcpy_direct(dma_mqpx, dest_lkey, dest_addr, src_lkey, src_addr, length);
         start_index++;
 
-        uint32_t num_wc = ibv_poll_cq(dma_send_cq, 1, wc);
+        uint32_t num_wc = ibv_poll_cq(dma_send_cq, 16, wc);
         for (uint32_t i = 0; i < num_wc; i++) {
             assert(wc[i].status == IBV_WC_SUCCESS);
-            finish_index++;
+            finish_index += dma_batch_size;
         }
     }
 };
@@ -131,8 +132,15 @@ struct smartns_cq {
     // bf_cq_buf/bf_cq_doorbell can't direct load/store, just record
     void *bf_cq_buf;
     smartns_cq_doorbell *bf_cq_doorbell;
-    uint32_t max_num;
-    uint32_t cur_num;
+
+    uint32_t wqe_size;
+    uint32_t wqe_cnt;
+    uint32_t wqe_shift;
+    uint32_t head;
+
+    uint8_t own_flag;
+
+    spinlock_mutex lock;
 };
 
 struct smartns_mr {
