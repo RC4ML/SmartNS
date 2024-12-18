@@ -6,6 +6,7 @@
 #include <execinfo.h>
 #include <assert.h>
 #include <sys/types.h>
+#include <bit>
 #include <infiniband/verbs.h>
 #include <infiniband/mlx5dv.h>
 

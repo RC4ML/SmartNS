@@ -32,12 +32,15 @@ struct alignas(64) dpu_recv_wq {
     inline smartns_recv_wqe *get_next_wqe() {
         smartns_recv_wqe *wqe = reinterpret_cast<smartns_recv_wqe *>(reinterpret_cast<uint8_t *>(bf_recv_wq_buf) + (head << wqe_shift));
         assert(wqe->op_own == own_flag);
-        head++;
+        return wqe;
+    }
+    inline uint32_t step_wq() {
+        uint32_t old_head = head++;
         if (head == wqe_cnt) {
             head = 0;
             own_flag = own_flag ^ SMARTNS_RECV_WQE_OWNER_MASK;
         }
-        return wqe;
+        return old_head;
     }
 };
 
@@ -68,12 +71,26 @@ struct dpu_pd {
 struct alignas(64) dpu_cq {
     struct dpu_context *dpu_ctx;
     size_t cq_number;
-    uint32_t max_num;
-    uint32_t cur_num;
+    uint32_t wqe_size;
+    uint32_t wqe_cnt;
+    uint32_t wqe_shift;
+    uint32_t head;
+    uint32_t tail;
+    uint32_t bf_mkey;
+    uint32_t host_mkey;
+
     void *host_cq_buf;
-    void *host_cq_doorbell;
+    smartns_cq_doorbell *host_cq_doorbell;
     void *bf_cq_buf;
-    void *bf_cq_doorbell;
+    smartns_cq_doorbell *bf_cq_doorbell;
+
+    uint8_t own_flag;
+    inline smartns_cqe *get_next_cqe() {
+        smartns_cqe *cqe = reinterpret_cast<smartns_cqe *>(reinterpret_cast<uint8_t *>(bf_cq_buf) + (head << wqe_shift));
+
+        // head update will happend in post_dma_req_with_cq
+        return cqe;
+    }
 };
 
 struct dpu_mr {
@@ -112,16 +129,136 @@ public:
     ibv_context *context;
     ibv_pd *pd;
 
-    std::vector<ibv_qp *> dma_qp_list;
-    std::vector<ibv_qp_ex *>dma_qpx_list;
-    std::vector<mlx5dv_qp_ex *> dma_mqpx_list;
-    std::vector<uint64_t> dma_start_index_list;
-    std::vector<uint64_t> dma_finish_index_list;
+    ibv_qp **dma_qp_list;
+    ibv_qp_ex **dma_qpx_list;
+    mlx5dv_qp_ex **dma_mqpx_list;
+    //plus one when dma anything, and reset to 0 when set signal
+    uint64_t *dma_count_list;
+    //plus one when dma packet payload, and reset to 0 when set signal
+    uint64_t *payload_count_list;
+
+    ibv_qp **invalid_qp_list;
+    ibv_qp_ex **invalid_qpx_list;
+    mlx5dv_qp_ex **invalid_mqpx_list;
+    uint64_t *invalid_start_index_list;
+    uint64_t *invalid_finish_index_list;
+
+    uint32_t now_use_qp_index;
+    uint32_t qp_group_size;
 
     // this cq will be shared within all DMA QP
-    ibv_cq *dma_send_cq;
-    // useless for dma 
-    ibv_cq *dma_recv_cq;
+    ibv_cq *dma_send_recv_cq;
+    // this cq will be shared within all cache invalid QP
+    ibv_cq *invalid_send_recv_cq;
+
+    inline void post_dma_req_without_cq(uint32_t dest_lkey, uint64_t dest_addr,
+        uint32_t src_lkey, uint64_t src_addr, size_t length) {
+        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH == (SMARTNS_DMA_BATCH - 1);
+
+        dma_count_list[now_use_qp_index]++;
+        payload_count_list[now_use_qp_index]++;
+
+        dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
+        dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
+        dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], dest_lkey, dest_addr, src_lkey, src_addr, length);
+
+        bool is_invalid_signal = invalid_start_index_list[now_use_qp_index] % 16 == 15;
+        invalid_qpx_list[now_use_qp_index]->wr_id = 0;
+        invalid_qpx_list[now_use_qp_index]->wr_flags = is_invalid_signal ? IBV_SEND_SIGNALED : 0;
+
+        invalid_mqpx_list[now_use_qp_index]->wr_invcache_direct_prefill(invalid_mqpx_list[now_use_qp_index], src_lkey, src_addr, length, false);
+        invalid_start_index_list[now_use_qp_index]++;
+
+        if (is_signal) {
+            dma_count_list[now_use_qp_index] = 0;
+            payload_count_list[now_use_qp_index] = 0;
+            now_use_qp_index = (now_use_qp_index + 1) % qp_group_size;
+        }
+    }
+
+    inline void post_dma_req_with_cq(uint32_t dest_lkey, uint64_t dest_addr,
+        uint32_t src_lkey, uint64_t src_addr, size_t length, dpu_cq *cq) {
+        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH >= (SMARTNS_DMA_BATCH - 2);
+
+        dma_count_list[now_use_qp_index] += 2;
+        payload_count_list[now_use_qp_index]++;
+
+        dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
+        // will signal at cq dma
+        dma_qpx_list[now_use_qp_index]->wr_flags = 0;
+        dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], dest_lkey, dest_addr, src_lkey, src_addr, length);
+
+        dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
+        dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
+        size_t cqe_offset = (cq->head & (cq->wqe_cnt - 1)) << cq->wqe_shift;
+        dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], cq->host_mkey, reinterpret_cast<uint64_t>(cq->host_cq_buf) + cqe_offset, cq->bf_mkey, reinterpret_cast<uint64_t>(cq->bf_cq_buf) + cqe_offset, cq->wqe_size);
+        cq->head++;
+        if (cq->head % cq->wqe_cnt == 0) {
+            cq->head = 0;
+            cq->own_flag = cq->own_flag ^ SMARTNS_CQE_OWNER_MASK;
+        }
+
+        bool is_invalid_signal = invalid_start_index_list[now_use_qp_index] % 16 == 15;
+        invalid_qpx_list[now_use_qp_index]->wr_id = 0;
+        invalid_qpx_list[now_use_qp_index]->wr_flags = is_invalid_signal ? IBV_SEND_SIGNALED : 0;
+
+        invalid_mqpx_list[now_use_qp_index]->wr_invcache_direct_prefill(invalid_mqpx_list[now_use_qp_index], src_lkey, src_addr, length, false);
+        invalid_start_index_list[now_use_qp_index]++;
+
+        if (is_signal) {
+            dma_count_list[now_use_qp_index] = 0;
+            payload_count_list[now_use_qp_index] = 0;
+            now_use_qp_index = (now_use_qp_index + 1) % qp_group_size;
+        }
+    }
+
+    inline void post_only_cq(dpu_cq *cq) {
+        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH == (SMARTNS_DMA_BATCH - 1);
+
+        dma_count_list[now_use_qp_index]++;
+
+        dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
+        dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
+        size_t cqe_offset = (cq->head & (cq->wqe_cnt - 1)) << cq->wqe_shift;
+        dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], cq->host_mkey, reinterpret_cast<uint64_t>(cq->host_cq_buf) + cqe_offset, cq->bf_mkey, reinterpret_cast<uint64_t>(cq->bf_cq_buf) + cqe_offset, cq->wqe_size);
+        cq->head++;
+        if (cq->head % cq->wqe_cnt == 0) {
+            cq->head = 0;
+            cq->own_flag = cq->own_flag ^ SMARTNS_CQE_OWNER_MASK;
+        }
+
+        if (is_signal) {
+            dma_count_list[now_use_qp_index] = 0;
+            payload_count_list[now_use_qp_index] = 0;
+            now_use_qp_index = (now_use_qp_index + 1) % qp_group_size;
+        }
+    }
+
+    inline uint32_t poll_dma_cq() {
+        uint32_t total_finish_dma = 0;
+        ibv_wc wc[16];
+        for (uint32_t i = 0;i < qp_group_size;i++) {
+            uint32_t num_wc = ibv_poll_cq(dma_send_recv_cq, 16, wc);
+            for (uint32_t j = 0; j < num_wc; j++) {
+                assert(wc[i].status == IBV_WC_SUCCESS);
+                uint64_t wr_id = wc[i].wr_id;
+                uint32_t qp_index = wr_id & 0xFFFFFFFF;
+                uint32_t payload_count = wr_id >> 32;
+                invalid_mqpx_list[qp_index]->wr_invcache_direct_flush(invalid_mqpx_list[qp_index], invalid_finish_index_list[qp_index], payload_count);
+                invalid_finish_index_list[qp_index] += payload_count;
+                total_finish_dma += payload_count;
+            }
+        }
+
+        for (uint32_t i = 0;i < qp_group_size;i++) {
+            uint32_t num_wc = ibv_poll_cq(invalid_send_recv_cq, 16, wc);
+            for (uint32_t j = 0; j < num_wc; j++) {
+                assert(wc[i].status == IBV_WC_SUCCESS);
+            }
+        }
+
+        return total_finish_dma;
+    }
 };
 
 class alignas(64) txpath_handler {

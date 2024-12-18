@@ -1,6 +1,9 @@
 #include "smartns_dv.h"
 #include "rdma_cm/libr.h"
 int main() {
+    assert(setenv("MLX5_TOTAL_UUARS", "33", 0) == 0);
+    assert(setenv("MLX5_NUM_LOW_LAT_UUARS", "32", 0) == 0);
+
     struct ibv_device *ib_dev = ctx_find_dev("mlx5_0");
 
     struct ibv_context *context = smartns_open_device(ib_dev);
@@ -31,15 +34,16 @@ int main() {
     struct ibv_qp *qp = smartns_create_qp(pd, &qp_init_attr);
     assert(qp);
 
-    for (size_t i = 0;i < 256;i++) {
-        struct ibv_recv_wr wr;
-        struct ibv_sge sge;
-        wr.wr_id = 1;
-        wr.next = nullptr;
-        wr.sg_list = &sge;
-        wr.num_sge = 1;
+    struct ibv_recv_wr wr;
+    struct ibv_sge sge;
+    wr.wr_id = 1;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
 
-        sge.addr = reinterpret_cast<uint64_t>(addr) + i * 4096;
+    size_t recv_index = 0;
+    for (recv_index = 0;recv_index < 256;recv_index++) {
+        sge.addr = reinterpret_cast<uint64_t>(addr) + (recv_index % 256) * 4096;
         sge.length = 4096;
         sge.lkey = mr->lkey;
 
@@ -47,7 +51,20 @@ int main() {
         assert(smartns_post_recv(qp, &wr, &bad_wr) == 0);
     }
 
-    sleep(100);
+    while (1) {
+        struct ibv_wc wc;
+        int ret = smartns_poll_cq(recv_cq, 1, &wc);
+        if (ret == 1) {
+            printf("wc status %d byte_len %d\n", wc.status, wc.byte_len);
+            sge.addr = reinterpret_cast<uint64_t>(addr) + (recv_index % 256) * 4096;
+            sge.length = 4096;
+            sge.lkey = mr->lkey;
+
+            struct ibv_recv_wr *bad_wr;
+            assert(smartns_post_recv(qp, &wr, &bad_wr) == 0);
+            recv_index++;
+        }
+    }
 
     assert(smartns_destroy_qp(qp) == 0);
 

@@ -248,12 +248,20 @@ void controlpath_manager::handle_create_cq(SMARTNS_CREATE_CQ_PARAMS *param) {
     dpu_cq *cq = new dpu_cq();
     cq->dpu_ctx = dpu_ctx;
     cq->cq_number = generate_cq_number();
-    cq->max_num = param->max_num;
-    cq->cur_num = 0;
+    cq->wqe_size = sizeof(smartns_cqe);
+    cq->wqe_cnt = param->max_num;
+    assert(cq->wqe_cnt == std::bit_ceil(cq->wqe_cnt));
+    cq->wqe_shift = std::log2(cq->wqe_size);
+    cq->head = 0;
+    cq->tail = 0;
+    cq->bf_mkey = dpu_ctx->inner_bf_mr->lkey;
+    cq->host_mkey = dpu_ctx->inner_host_mr->lkey;
+    cq->own_flag = 1;
+
     cq->host_cq_buf = param->host_cq_buf;
-    cq->host_cq_doorbell = param->host_cq_doorbell;
+    cq->host_cq_doorbell = reinterpret_cast<smartns_cq_doorbell *>(param->host_cq_doorbell);
     cq->bf_cq_buf = param->bf_cq_buf;
-    cq->bf_cq_doorbell = param->bf_cq_doorbell;
+    cq->bf_cq_doorbell = reinterpret_cast<smartns_cq_doorbell *>(param->bf_cq_doorbell);
 
     dpu_ctx->cq_list[cq->cq_number] = cq;
 

@@ -320,12 +320,27 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
     this->context = context;
     this->pd = pd;
 
-    assert(dma_send_cq = create_dma_cq(context, 64 * SMARTNS_DMA_GROUP_SIZE));
-    // use the same cq
-    dma_recv_cq = dma_send_cq;
+    assert(dma_send_recv_cq = create_dma_cq(context, 128 * SMARTNS_DMA_GROUP_SIZE));
+    assert(invalid_send_recv_cq = create_dma_cq(context, 128 * SMARTNS_DMA_GROUP_SIZE));
+
+    dma_qp_list = new ibv_qp * [SMARTNS_DMA_GROUP_SIZE];
+    dma_qpx_list = new ibv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
+    dma_mqpx_list = new mlx5dv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
+    dma_count_list = new uint64_t[SMARTNS_DMA_GROUP_SIZE];
+    payload_count_list = new uint64_t[SMARTNS_DMA_GROUP_SIZE];
+
+    invalid_qp_list = new ibv_qp * [SMARTNS_DMA_GROUP_SIZE];
+    invalid_qpx_list = new ibv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
+    invalid_mqpx_list = new mlx5dv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
+    invalid_start_index_list = new uint64_t[SMARTNS_DMA_GROUP_SIZE];
+    invalid_finish_index_list = new uint64_t[SMARTNS_DMA_GROUP_SIZE];
+
+    now_use_qp_index = 0;
+    qp_group_size = SMARTNS_DMA_GROUP_SIZE;
+
 
     for (size_t i = 0;i < SMARTNS_DMA_GROUP_SIZE;i++) {
-        ibv_qp *dma_qp = create_dma_qp(context, pd, dma_recv_cq, dma_send_cq, 128);
+        ibv_qp *dma_qp = create_dma_qp(context, pd, dma_send_recv_cq, dma_send_recv_cq, 128);
         init_dma_qp(dma_qp);
         dma_qp_self_connected(dma_qp);
 
@@ -333,19 +348,49 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
         mlx5dv_qp_ex *dma_mqpx = mlx5dv_qp_ex_from_ibv_qp_ex(dma_qpx);
         // important for init before do memcpy
         dma_mqpx->wr_memcpy_direct_init(dma_mqpx);
-        dma_qp_list.push_back(dma_qp);
-        dma_qpx_list.push_back(dma_qpx);
-        dma_mqpx_list.push_back(dma_mqpx);
-        dma_start_index_list.push_back(0);
-        dma_finish_index_list.push_back(0);
+        dma_qp_list[i] = dma_qp;
+        dma_qpx_list[i] = dma_qpx;
+        dma_mqpx_list[i] = dma_mqpx;
+        dma_count_list[i] = 0;
+        payload_count_list[i] = 0;
+    }
+
+    for (size_t i = 0;i < SMARTNS_DMA_GROUP_SIZE;i++) {
+        ibv_qp *dma_qp = create_dma_qp(context, pd, dma_send_recv_cq, dma_send_recv_cq, 128);
+        init_dma_qp(dma_qp);
+        dma_qp_self_connected(dma_qp);
+
+        ibv_qp_ex *dma_qpx = ibv_qp_to_qp_ex(dma_qp);
+        mlx5dv_qp_ex *dma_mqpx = mlx5dv_qp_ex_from_ibv_qp_ex(dma_qpx);
+        // important for init before do memcpy
+        dma_mqpx->wr_invcache_direct_init(dma_mqpx);
+        invalid_qp_list[i] = dma_qp;
+        invalid_qpx_list[i] = dma_qpx;
+        invalid_mqpx_list[i] = dma_mqpx;
+        invalid_start_index_list[i] = 0;
+        invalid_finish_index_list[i] = 0;
     }
 }
 
 dma_handler::~dma_handler() {
     for (size_t i = 0;i < SMARTNS_DMA_GROUP_SIZE;i++) {
         ibv_destroy_qp(dma_qp_list[i]);
+        ibv_destroy_qp(invalid_qp_list[i]);
     }
-    ibv_destroy_cq(dma_send_cq);
+    ibv_destroy_cq(dma_send_recv_cq);
+    ibv_destroy_cq(invalid_send_recv_cq);
+
+    delete[]dma_qp_list;
+    delete[]dma_qpx_list;
+    delete[]dma_mqpx_list;
+    delete[]dma_count_list;
+    delete[]payload_count_list;
+
+    delete[]invalid_qp_list;
+    delete[]invalid_qpx_list;
+    delete[]invalid_mqpx_list;
+    delete[]invalid_start_index_list;
+    delete[]invalid_finish_index_list;
 }
 
 size_t datapath_handler::handle_recv() {
@@ -366,13 +411,22 @@ size_t datapath_handler::handle_recv() {
         smartns_recv_wqe *recv_wqe = qp->recv_wq->get_next_wqe();
         printf("recv wqe addr 0X%lx lkey %u byte count %u\n", recv_wqe->addr, recv_wqe->lkey, recv_wqe->byte_count);
 
-        // this step should afer dma cq
-        rxpath_handler->recv_comp_offset_handler.step();
+        smartns_cqe *cqe = qp->recv_cq->get_next_cqe();
+        cqe->byte_count = wc_send_recv->byte_len;
+        cqe->cq_opcode = MLX5_CQE_RESP_SEND;
+        cqe->mlx5_opcode = 0;
+        cqe->op_own = qp->recv_cq->own_flag;
+        cqe->qpn = qp->qp_number;
+        cqe->wqe_counter = qp->recv_wq->step_wq();
+
+        dma_handler->post_dma_req_with_cq(recv_wqe->lkey, recv_wqe->addr, rxpath_handler->mr->lkey, wc_send_recv[i].wr_id, wc_send_recv[i].byte_len, qp->recv_cq);
     }
 
-    // must after do dma ops
-    if (rxpath_handler->recv_comp_offset_handler.index() % SMARTNS_RX_BATCH == SMARTNS_RX_BATCH - 1) {
-        for (int i = 0;i < SMARTNS_RX_BATCH;i++) {
+    uint32_t dma_finish = dma_handler->poll_dma_cq();
+
+    while (dma_finish) {
+        uint32_t now_post_recv = min_(SMARTNS_RX_BATCH, dma_finish);
+        for (uint32_t i = 0;i < now_post_recv;i++) {
             rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].addr = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
             rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].length = SMARTNS_RX_PACKET_BUFFER;
             rxpath_handler->recv_wr[i].wr_id = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
@@ -384,6 +438,7 @@ size_t datapath_handler::handle_recv() {
             rxpath_handler->recv_offset_handler.step();
         }
         assert(ibv_post_wq_recv(rxpath_handler->recv_wq, rxpath_handler->recv_wr, &rxpath_handler->recv_bad_wr) == 0);
+        dma_finish -= now_post_recv;
     }
 
     return recv;
