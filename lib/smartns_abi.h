@@ -14,13 +14,30 @@ static __attribute__((unused)) uint8_t vhca_access_key[32] = {
     1, 1, 1, 1, 1, 1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1
 };
+#define SMARTNS_SEND_WQE_OWNER_MASK 1
 
 #define SMARTNS_RECV_WQE_OWNER_MASK 1
 
 #define SMARTNS_CQE_OWNER_MASK 1
 
 struct __attribute__((packed)) smartns_send_wqe {
-    char a[64];
+    uint64_t qpn;
+    uint32_t opcode;
+    uint32_t imm;
+
+    uint64_t local_addr;
+    uint32_t local_lkey;
+    uint32_t byte_count;
+
+    uint64_t remote_addr;
+    uint32_t remote_rkey;
+    uint32_t reserved1;
+
+    uint32_t cur_pos;
+    uint8_t is_signal;
+    uint8_t op_own;
+
+    uint8_t reserved2[10];
 };
 
 struct __attribute__((packed)) smartns_recv_wqe {
@@ -138,7 +155,7 @@ struct SMARTNS_CREATE_QP_PARAMS {
     unsigned long int context_number;
     unsigned long int pd_number;
 
-    unsigned long int send_wq_id;
+    unsigned long int datapath_send_wq_id;
     unsigned long int recv_wq_size;
     void *host_recv_wq_addr;
     void *bf_recv_wq_addr;

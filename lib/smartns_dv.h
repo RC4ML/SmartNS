@@ -50,16 +50,23 @@ struct smartns_dma_wq {
 };
 
 struct alignas(64) smartns_send_wq {
-    size_t send_wq_id;
+    size_t datapath_send_wq_id;
     uint32_t host_mr_lkey;
     uint32_t bf_mr_lkey;
 
     void *host_send_wq_buf;
     void *bf_send_wq_buf;
+    uint64_t *wrid;
 
-    uint32_t max_num;
-    uint32_t cur_num;
+    uint32_t wqe_size;
+    uint32_t wqe_cnt;
+    uint32_t wqe_shift;
+    uint32_t max_sge;
 
+    uint32_t head;
+    uint32_t tail;
+
+    uint8_t own_flag;
     struct smartns_dma_wq dma_wq;
     spinlock_mutex lock;
 };
@@ -168,13 +175,13 @@ struct smartns_context {
 
     std::vector<smartns_send_wq *> send_wq_list;
     // qpn to struct qp
-    phmap::flat_hash_map<size_t, smartns_qp *>qp_list;
+    phmap::parallel_flat_hash_map<size_t, smartns_qp *>qp_list;
     // pdn to struct pd
-    phmap::flat_hash_map<size_t, smartns_pd *>pd_list;
+    phmap::parallel_flat_hash_map<size_t, smartns_pd *>pd_list;
     // cqn to struct cq
-    phmap::flat_hash_map<size_t, smartns_cq *>cq_list;
+    phmap::parallel_flat_hash_map<size_t, smartns_cq *>cq_list;
     // host mkey to mr
-    phmap::flat_hash_map<unsigned int, smartns_mr *>mr_list;
+    phmap::parallel_flat_hash_map<unsigned int, smartns_mr *>mr_list;
 };
 
 struct ibv_context *smartns_open_device(struct ibv_device *ib_dev);

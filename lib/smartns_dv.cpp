@@ -56,7 +56,7 @@ struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
 
     for (uint32_t i = 0;i < params.send_wq_number;i++) {
         smartns_send_wq *send_wq = new smartns_send_wq();
-        send_wq->send_wq_id = i;
+        send_wq->datapath_send_wq_id = i;
         send_wq->host_mr_lkey = s_ctx->inner_host_mr->lkey;
         send_wq->bf_mr_lkey = s_ctx->inner_bf_mr->lkey;
 
@@ -68,8 +68,16 @@ struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
         bf_base_addr = reinterpret_cast<void *>(reinterpret_cast<size_t>(bf_base_addr) + params.send_wq_capacity * sizeof(smartns_send_wqe));
         bf_total_size -= params.send_wq_capacity * sizeof(smartns_send_wqe);
 
-        send_wq->max_num = params.send_wq_capacity;
-        send_wq->cur_num = 0;
+        send_wq->wqe_size = sizeof(smartns_send_wqe);
+        send_wq->wqe_cnt = params.send_wq_capacity;
+        send_wq->wqe_shift = std::log2(send_wq->wqe_size);
+        send_wq->max_sge = 1;
+        send_wq->wrid = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t) * send_wq->wqe_cnt));
+
+        send_wq->head = 0;
+        send_wq->tail = 0;
+
+        send_wq->own_flag = 1;
 
         send_wq->dma_wq.dma_send_cq = create_dma_cq(context, 128);
         send_wq->dma_wq.dma_recv_cq = send_wq->dma_wq.dma_send_cq;
@@ -118,6 +126,7 @@ int smartns_close_device(struct ibv_context *context) {
     }
 
     for (auto &send_wq : s_ctx->send_wq_list) {
+        free(send_wq->wrid);
         ibv_destroy_qp(send_wq->dma_wq.dma_qp);
         // don't need destory recv_cq because it's equal to send_cq
         ibv_destroy_cq(send_wq->dma_wq.dma_send_cq);
@@ -374,7 +383,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     assert(s_ctx->cq_list.count(send_cq->cq_number) != 0);
     assert(s_ctx->cq_list.count(recv_cq->cq_number) != 0);
 
-    // use sq_sig_all as send_wq_id
+    // use sq_sig_all as datapath_send_wq_id
     assert(static_cast<size_t>(qp_init_attr->sq_sig_all) < s_ctx->send_wq_list.size());
 
     uint32_t		max_send_wr = qp_init_attr->cap.max_send_wr;
@@ -384,10 +393,17 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     uint32_t		max_inline_data = qp_init_attr->cap.max_inline_data;
     enum ibv_qp_type	qp_type = qp_init_attr->qp_type;
 
+    // only support max_send_sge == 1 at now
+    assert(max_send_sge == 1);
+    // don't support inline data at now
+    assert(max_inline_data == 0);
+
     uint32_t recv_wqe_size = max_(1, max_recv_sge) * sizeof(smartns_recv_wqe);
     recv_wqe_size = std::bit_ceil(recv_wqe_size);
 
-    uint32_t recv_wq_size = std::bit_ceil(max_recv_wr) * recv_wqe_size;
+    uint32_t send_wqe_cnt = std::bit_ceil(max_send_wr);
+    uint32_t recv_wqe_cnt = std::bit_ceil(max_recv_wr);
+    uint32_t recv_wq_size = recv_wqe_cnt * recv_wqe_size;
 
     void *host_recv_wq_addr = s_ctx->host_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
     void *bf_recv_wq_addr = s_ctx->bf_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
@@ -397,17 +413,17 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
 
     params.context_number = s_ctx->context_number;
     params.pd_number = s_pd->pd_number;
-    params.send_wq_id = qp_init_attr->sq_sig_all;
+    params.datapath_send_wq_id = qp_init_attr->sq_sig_all;
     params.recv_wq_size = recv_wq_size;
     params.host_recv_wq_addr = host_recv_wq_addr;
     params.bf_recv_wq_addr = bf_recv_wq_addr;
     params.send_cq_number = send_cq->cq_number;
     params.recv_cq_number = recv_cq->cq_number;
-    params.max_send_wr = max_send_wr;
-    params.max_recv_wr = std::bit_ceil(max_recv_wr);
+    params.max_send_wr = send_wqe_cnt;
+    params.max_recv_wr = recv_wqe_cnt;
     params.max_send_sge = max_send_sge;
     params.max_recv_sge = recv_wqe_size / sizeof(smartns_recv_wqe);
-    params.max_inline_data = max_inline_data;
+    params.max_inline_data = 0;
     params.qp_type = qp_type;
 
     int retcode = ioctl(s_ctx->kernel_fd, SMARTNS_IOC_CREATE_QP, &params);
@@ -426,8 +442,8 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->context = s_ctx;
     s_qp->pd = s_pd;
     s_qp->qp_number = params.qp_number;
-    s_qp->max_send_wr = max_send_wr;
-    s_qp->max_recv_wr = std::bit_ceil(max_recv_wr);
+    s_qp->max_send_wr = send_wqe_cnt;
+    s_qp->max_recv_wr = recv_wqe_cnt;
     s_qp->max_send_sge = max_send_sge;
     s_qp->max_recv_sge = recv_wqe_size / sizeof(smartns_recv_wqe);
     s_qp->max_inline_data = max_inline_data;
@@ -446,7 +462,7 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->recv_wq->bf_recv_wq_buf = bf_recv_wq_addr;
 
     s_qp->recv_wq->wqe_size = recv_wqe_size;
-    s_qp->recv_wq->wqe_cnt = std::bit_ceil(max_recv_wr);
+    s_qp->recv_wq->wqe_cnt = recv_wqe_cnt;
     s_qp->recv_wq->wqe_shift = std::log2(recv_wqe_size);
     s_qp->recv_wq->max_sge = max_(1, max_recv_sge);
     s_qp->recv_wq->head = 0;
@@ -511,6 +527,70 @@ int smartns_destroy_qp(struct ibv_qp *qp) {
     delete s_qp->recv_wq;
     delete s_qp;
 
+    return 0;
+}
+
+
+int smartns_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad_wr) {
+    struct smartns_qp *s_qp = reinterpret_cast<smartns_qp *>(qp);
+
+    struct smartns_send_wqe *scat;
+    int nreq;
+    int ind;
+    int begin_indx;
+
+    s_qp->send_wq->lock.lock();
+    ind = s_qp->send_wq->head & (s_qp->send_wq->wqe_cnt - 1);
+    begin_indx = ind;
+
+    for (nreq = 0;wr++;++nreq, wr = wr->next) {
+        if (unlikely(s_qp->send_wq->head - s_qp->send_wq->tail + nreq >= s_qp->send_wq->wqe_cnt)) {
+            fprintf(stderr, "Error, post send wq full\n");
+            exit(1);
+        }
+        if (unlikely(static_cast<uint32_t>(wr->num_sge) > s_qp->max_send_sge)) {
+            fprintf(stderr, "Error, post send sge too many\n");
+            exit(1);
+        }
+
+        scat = reinterpret_cast<struct smartns_send_wqe *>(reinterpret_cast<uint8_t *>(s_qp->send_wq->host_send_wq_buf) + (ind << s_qp->send_wq->wqe_shift));
+        scat->qpn = s_qp->qp_number;
+        scat->opcode = wr->opcode;
+        scat->imm = 0;
+        scat->local_addr = wr->sg_list[0].addr;
+
+        assert(s_qp->context->mr_list.count(wr->sg_list[0].lkey));
+        scat->local_lkey = s_qp->context->mr_list[wr->sg_list[0].lkey]->bf_mkey;
+        scat->byte_count = wr->sg_list[0].length;
+
+        if (wr->opcode == IBV_WR_RDMA_WRITE || wr->opcode == IBV_WR_RDMA_READ) {
+            scat->remote_addr = wr->wr.rdma.remote_addr;
+            scat->remote_rkey = wr->wr.rdma.rkey;
+        }
+        scat->cur_pos = ind;
+        scat->is_signal = wr->send_flags & IBV_SEND_SIGNALED;
+        scat->op_own = s_qp->send_wq->own_flag;
+
+        s_qp->send_wq->wrid[ind] = wr->wr_id;
+
+        ind++;
+        if (static_cast<uint32_t>(ind) == s_qp->send_wq->wqe_cnt) {
+            s_qp->send_wq->dma_wq.post_dma_req(s_qp->send_wq->bf_mr_lkey, reinterpret_cast<uint64_t>(s_qp->send_wq->bf_send_wq_buf) + (begin_indx << s_qp->send_wq->wqe_shift),
+                s_qp->send_wq->host_mr_lkey, reinterpret_cast<uint64_t>(s_qp->send_wq->host_send_wq_buf) + (begin_indx << s_qp->send_wq->wqe_shift), (ind - begin_indx) * s_qp->send_wq->wqe_size);
+            ind = 0;
+            begin_indx = 0;
+            s_qp->send_wq->own_flag = s_qp->send_wq->own_flag ^ SMARTNS_SEND_WQE_OWNER_MASK;
+        }
+    }
+    if (nreq) {
+        s_qp->send_wq->head += nreq;
+        if (ind - begin_indx > 0) {
+            s_qp->send_wq->dma_wq.post_dma_req(s_qp->send_wq->bf_mr_lkey, reinterpret_cast<uint64_t>(s_qp->send_wq->bf_send_wq_buf) + (begin_indx << s_qp->send_wq->wqe_shift),
+                s_qp->send_wq->host_mr_lkey, reinterpret_cast<uint64_t>(s_qp->send_wq->host_send_wq_buf) + (begin_indx << s_qp->send_wq->wqe_shift), (ind - begin_indx) * s_qp->send_wq->wqe_size);
+        }
+    }
+
+    s_qp->send_wq->lock.unlock();
     return 0;
 }
 
