@@ -12,13 +12,89 @@
 
 extern std::atomic<bool> stop_flag;
 
+struct alignas(64) dpu_datapath_send_wq {
+    struct dpu_context *dpu_ctx;
+    size_t datapath_send_wq_id;
+    void *bf_datapath_send_wq_buf;
+
+    uint32_t wqe_size;
+    uint32_t wqe_cnt;
+    uint32_t wqe_shift;
+    uint32_t head;
+
+    uint8_t own_flag;
+
+    smartns_send_wqe *get_next_wqe() {
+        smartns_send_wqe *wqe = reinterpret_cast<smartns_send_wqe *>(reinterpret_cast<uint8_t *>(bf_datapath_send_wq_buf) + (head << wqe_shift));
+        if (wqe->op_own != own_flag) {
+            return nullptr;
+        }
+        return wqe;
+    }
+
+    void step_wq() {
+        ++head;
+        if (head == wqe_cnt) {
+            head = 0;
+            own_flag = own_flag ^ SMARTNS_SEND_WQE_OWNER_MASK;
+        }
+    }
+};
+
+struct alignas(64) dpu_send_wqe {
+    uint64_t local_addr;
+    uint32_t local_lkey;
+    uint32_t byte_count;
+    uint32_t imm;
+
+    uint64_t remote_addr;
+    uint32_t remote_rkey;
+    uint32_t opcode;
+    uint32_t cur_pos;
+
+    uint8_t is_signal;
+    // TODO
+};
+
 struct alignas(64) dpu_send_wq {
     struct dpu_context *dpu_ctx;
     void *bf_send_wq_buf;
-    uint32_t max_num;
-    uint32_t cur_num;
-    size_t send_wq_id;
+
+    uint32_t wqe_size;
+    uint32_t wqe_cnt;
+    uint32_t wqe_shift;
+    uint32_t head;
+    uint32_t cur_sended_head;
+    uint32_t tail;
+
+    dpu_send_wqe *get_next_wqe() {
+        dpu_send_wqe *wqe = reinterpret_cast<dpu_send_wqe *>(reinterpret_cast<uint8_t *>(bf_send_wq_buf) + (head << wqe_shift));
+        return wqe;
+    }
+
+    void step_head() {
+        ++head;
+        if (head == wqe_cnt) {
+            head = 0;
+        }
+    }
+
+    void step_tail() {
+        ++tail;
+        if (tail == wqe_cnt) {
+            tail = 0;
+        }
+    }
+
+    bool is_full() {
+        return (tail + 1) % wqe_cnt == head;
+    }
+
+    bool is_empty() {
+        return head == tail;
+    }
 };
+
 
 struct alignas(64) dpu_recv_wq {
     struct dpu_context *dpu_ctx;
@@ -67,6 +143,7 @@ struct alignas(64) dpu_qp {
     struct dpu_cq *send_cq;
     struct dpu_cq *recv_cq;
 
+    struct dpu_datapath_send_wq *datapath_send_wq;
     struct dpu_send_wq *send_wq;
     struct dpu_recv_wq *recv_wq;
 };
@@ -122,16 +199,16 @@ struct dpu_context {
     struct devx_mr *inner_bf_mr;
     struct devx_mr *inner_host_mr;
 
-    std::vector<dpu_send_wq> send_wq_list;
+    std::vector<dpu_datapath_send_wq> datapath_send_wq_list;
 
     // pdn to struct pd
-    phmap::flat_hash_map<size_t, dpu_pd *>pd_list;
+    phmap::parallel_flat_hash_map<size_t, dpu_pd *>pd_list;
     // cqn to struct cq
-    phmap::flat_hash_map<size_t, dpu_cq *>cq_list;
+    phmap::parallel_flat_hash_map<size_t, dpu_cq *>cq_list;
     // qpn to struct qp
-    phmap::flat_hash_map<size_t, dpu_qp *>qp_list;
+    phmap::parallel_flat_hash_map<size_t, dpu_qp *>qp_list;
     // host mkey to mr
-    phmap::flat_hash_map<unsigned int, dpu_mr *>mr_list;
+    phmap::parallel_flat_hash_map<unsigned int, dpu_mr *>mr_list;
 };
 
 class alignas(64) dma_handler {
@@ -337,8 +414,16 @@ public:
     ::rxpath_handler *rxpath_handler;
     struct ibv_wc *wc_send_recv;
 
+    // don't need use parallel hash map
     phmap::flat_hash_map<uint64_t, dpu_qp *>local_qpn_to_qp_list;
     phmap::flat_hash_map<uint64_t, dpu_qp *>remote_qpn_to_qp_list;
+
+    phmap::flat_hash_set<dpu_qp *>active_qp_list;
+    phmap::flat_hash_set<dpu_datapath_send_wq *>active_datapath_send_wq_list;
+
+    void loop_datapath_send_wq();
+
+    size_t handle_send();
 
     size_t handle_recv();
 
@@ -397,7 +482,7 @@ public:
     void handle_destory_qp(SMARTNS_DESTROY_QP_PARAMS *param);
     void handle_modify_qp(SMARTNS_MODIFY_QP_PARAMS *param);
 
-    phmap::flat_hash_map<size_t, dpu_context *>context_list;
+    phmap::parallel_flat_hash_map<size_t, dpu_context *>context_list;
 
     ibv_context *global_context;
     ibv_pd *global_pd;

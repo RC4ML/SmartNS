@@ -74,19 +74,28 @@ void controlpath_manager::handle_open_device(SMARTNS_OPEN_DEVICE_PARAMS *param) 
     assert(devx_mr_allow_other_vhca_access(dpu_ctx->inner_bf_mr, vhca_access_key, sizeof(vhca_access_key)) == 0);
 
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
-        dpu_send_wq send_wq;
-        send_wq.dpu_ctx = dpu_ctx;
-        send_wq.bf_send_wq_buf = bf_mr_base;
-        send_wq.max_num = SMARTNS_TX_DEPTH;
-        send_wq.cur_num = 0;
-        send_wq.send_wq_id = i;
+        dpu_datapath_send_wq datapath_send_wq;
+        datapath_send_wq.dpu_ctx = dpu_ctx;
+        datapath_send_wq.datapath_send_wq_id = i;
+        datapath_send_wq.bf_datapath_send_wq_buf = bf_mr_base;
+        datapath_send_wq.wqe_size = sizeof(smartns_send_wqe);
+        datapath_send_wq.wqe_cnt = SMARTNS_TX_DEPTH;
+        datapath_send_wq.wqe_shift = std::log2(datapath_send_wq.wqe_size);
+        datapath_send_wq.head = 0;
+        datapath_send_wq.own_flag = 1;
 
-        dpu_ctx->send_wq_list.emplace_back(send_wq);
+        dpu_ctx->datapath_send_wq_list.emplace_back(datapath_send_wq);
 
         bf_mr_base = reinterpret_cast<void *>(reinterpret_cast<size_t>(bf_mr_base) + sizeof(smartns_send_wqe) * SMARTNS_TX_DEPTH);
+
     }
 
-    // TODO add send_wq to each datapath
+    // add datapath_send_wq to each datapath's handler
+    // warning: this  address maybe change?
+    for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
+        data_manager->datapath_handler_list[i].active_datapath_send_wq_list.insert(&dpu_ctx->datapath_send_wq_list[i]);
+    }
+
     context_list[dpu_ctx->context_number] = dpu_ctx;
 
     param->bf_vhca_id = dpu_ctx->inner_bf_mr->vhca_id;
@@ -127,7 +136,10 @@ void controlpath_manager::handle_close_device(SMARTNS_CLOSE_DEVICE_PARAMS *param
         exit(1);
     }
 
-    // TODO del each datapath send_wq
+    // del each datapath_send_wq
+    for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
+        data_manager->datapath_handler_list[i].active_datapath_send_wq_list.erase(&dpu_ctx->datapath_send_wq_list[i]);
+    }
 
     free(dpu_ctx->inner_bf_mr->addr);
 
@@ -315,8 +327,19 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
         exit(1);
     }
 
-    assert(param->send_wq_id < SMARTNS_TX_RX_CORE);
-    struct dpu_send_wq *send_wq = &dpu_ctx->send_wq_list[param->send_wq_id];
+    assert(param->datapath_send_wq_id < SMARTNS_TX_RX_CORE);
+    struct dpu_datapath_send_wq *datapath_send_wq = &dpu_ctx->datapath_send_wq_list[param->datapath_send_wq_id];
+
+    struct dpu_send_wq *send_wq = new dpu_send_wq();
+    send_wq->dpu_ctx = dpu_ctx;
+    send_wq->bf_send_wq_buf = calloc(param->max_send_wr, sizeof(smartns_send_wqe));
+    send_wq->wqe_size = sizeof(smartns_send_wqe);
+    send_wq->wqe_cnt = param->max_send_wr;
+    send_wq->wqe_shift = std::log2(send_wq->wqe_size);
+    send_wq->head = 0;
+    send_wq->cur_sended_head = 0;
+    send_wq->tail = 0;
+
     struct dpu_recv_wq *recv_wq = new dpu_recv_wq();
     recv_wq->dpu_ctx = dpu_ctx;
     recv_wq->bf_recv_wq_buf = param->bf_recv_wq_addr;
@@ -343,13 +366,15 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
 
     qp->send_cq = send_cq;
     qp->recv_cq = recv_cq;
+
+    qp->datapath_send_wq = datapath_send_wq;
     qp->send_wq = send_wq;
     qp->recv_wq = recv_wq;
 
     dpu_ctx->qp_list[qp->qp_number] = qp;
 
     // add to special datapath
-    data_manager->datapath_handler_list[param->send_wq_id].local_qpn_to_qp_list[qp->qp_number] = qp;
+    data_manager->datapath_handler_list[param->datapath_send_wq_id].local_qpn_to_qp_list[qp->qp_number] = qp;
 
     param->qp_number = qp->qp_number;
     param->common_params.success = 1;
@@ -376,7 +401,12 @@ void controlpath_manager::handle_destory_qp(SMARTNS_DESTROY_QP_PARAMS *param) {
     }
 
     // remove from special datapath
-    data_manager->datapath_handler_list[qp->send_wq->send_wq_id].local_qpn_to_qp_list.erase(param->qp_number);
+    data_manager->datapath_handler_list[qp->datapath_send_wq->datapath_send_wq_id].local_qpn_to_qp_list.erase(param->qp_number);
+
+    free(qp->send_wq->bf_send_wq_buf);
+    delete qp->send_wq;
+    // don't need to free
+    delete qp->recv_wq;
 
     dpu_ctx->qp_list.erase(param->qp_number);
     delete qp;

@@ -393,6 +393,18 @@ dma_handler::~dma_handler() {
     delete[]invalid_finish_index_list;
 }
 
+size_t datapath_handler::handle_send() {
+    for (auto qp : active_qp_list) {
+        dpu_send_wq *send_wq = qp->send_wq;
+        assert(!send_wq->is_empty());
+        for (;send_wq->cur_sended_head != send_wq->head;send_wq->cur_sended_head = (send_wq->cur_sended_head + 1) % send_wq->wqe_cnt) {
+            // TODO
+        }
+    }
+
+    return 0;
+}
+
 size_t datapath_handler::handle_recv() {
     int recv = ibv_poll_cq(rxpath_handler->recv_cq, CTX_POLL_BATCH, wc_send_recv);
 
@@ -493,4 +505,38 @@ void datapath_handler::dma_payload_with_cq_to_host(dpu_qp *qp, void *paylod_buf,
     qp->recv_wq->step_wq();
     qp->recv_cq->step_cq();
     return;
+}
+
+void datapath_handler::loop_datapath_send_wq() {
+    for (auto datapath_send_wq : active_datapath_send_wq_list) {
+        smartns_send_wqe *wqe;
+        while ((wqe = datapath_send_wq->get_next_wqe()) != nullptr) {
+            datapath_send_wq->step_wq();
+
+            dpu_qp *qp = local_qpn_to_qp_list[wqe->qpn];
+            assert(qp);
+
+            dpu_send_wq *send_wq = qp->send_wq;
+
+            // ADD to active list
+            if (send_wq->is_empty()) {
+                active_qp_list.insert(qp);
+            }
+
+            dpu_send_wqe *send_wqe = send_wq->get_next_wqe();
+            send_wqe->local_addr = wqe->local_addr;
+            send_wqe->local_lkey = wqe->local_lkey;
+            send_wqe->byte_count = wqe->byte_count;
+            send_wqe->imm = wqe->imm;
+            send_wqe->remote_addr = wqe->remote_addr;
+            send_wqe->remote_rkey = wqe->remote_rkey;
+            send_wqe->opcode = wqe->opcode;
+            send_wqe->cur_pos = wqe->cur_pos;
+            send_wqe->is_signal = wqe->is_signal;
+
+            // TODO
+
+            send_wq->step_head();
+        }
+    }
 }
