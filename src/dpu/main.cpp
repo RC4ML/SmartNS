@@ -12,29 +12,33 @@ void client_datapath(datapath_handler *handler) {
     if (handler->thread_id != 0) {
         return;
     }
-    for (size_t i = 0;i < SMARTNS_TX_BATCH;i++) {
-        handler->txpath_handler->send_sge_list[i * SMARTNS_TX_SEG].addr = handler->txpath_handler->send_offset_handler.offset() + handler->txpath_handler->send_buf_addr;
-        handler->txpath_handler->send_sge_list[i * SMARTNS_TX_SEG].length = SMARTNS_TX_PACKET_BUFFER;
-        handler->txpath_handler->send_wr[i].num_sge = 1;
-        handler->txpath_handler->send_wr[i].sg_list = handler->txpath_handler->send_sge_list + i * SMARTNS_TX_SEG;
-        handler->txpath_handler->send_wr[i].wr_id = handler->txpath_handler->send_offset_handler.offset() + handler->txpath_handler->send_buf_addr;
-        handler->txpath_handler->send_wr[i].send_flags = IBV_SEND_SIGNALED;
-        if (i > 0) {
-            handler->txpath_handler->send_wr[i - 1].next = &handler->txpath_handler->send_wr[i];
-        }
-        handler->txpath_handler->send_offset_handler.step();
-    }
-    assert(ibv_post_send(handler->txpath_handler->send_qp, handler->txpath_handler->send_wr, &handler->txpath_handler->send_bad_wr) == 0);
 
     struct ibv_wc *wc_send = NULL;
     ALLOCATE(wc_send, struct ibv_wc, CTX_POLL_BATCH);
 
     while (!stop_flag) {
+        for (size_t i = 0;i < SMARTNS_TX_BATCH;i++) {
+            handler->txpath_handler->send_sge_list[i * SMARTNS_TX_SEG].addr = handler->txpath_handler->send_offset_handler.offset() + handler->txpath_handler->send_buf_addr;
+            handler->txpath_handler->send_sge_list[i * SMARTNS_TX_SEG].length = SMARTNS_TX_PACKET_BUFFER;
+            handler->txpath_handler->send_wr[i].num_sge = 1;
+            handler->txpath_handler->send_wr[i].sg_list = handler->txpath_handler->send_sge_list + i * SMARTNS_TX_SEG;
+            handler->txpath_handler->send_wr[i].wr_id = handler->txpath_handler->send_offset_handler.offset() + handler->txpath_handler->send_buf_addr;
+            handler->txpath_handler->send_wr[i].send_flags = IBV_SEND_SIGNALED;
+            if (i > 0) {
+                handler->txpath_handler->send_wr[i - 1].next = &handler->txpath_handler->send_wr[i];
+            }
+            handler->txpath_handler->send_offset_handler.step();
+        }
+        assert(ibv_post_send(handler->txpath_handler->send_qp, handler->txpath_handler->send_wr, &handler->txpath_handler->send_bad_wr) == 0);
+
         int ne_send = ibv_poll_cq(handler->txpath_handler->send_cq, CTX_POLL_BATCH, wc_send);
         for (int i = 0;i < ne_send;i++) {
             assert(wc_send[i].status == IBV_WC_SUCCESS);
             printf("thread %ld send comp %u\n", handler->thread_id, wc_send[i].byte_len);
+            handler->txpath_handler->send_comp_offset_handler.step();
         }
+
+        sleep(1);
     }
 
     return;

@@ -22,7 +22,7 @@ static_assert(sizeof(smartns_cqe) == 64);
 static_assert(sizeof(smartns_cq_doorbell) == 64);
 
 struct smartns_dma_wq {
-    const size_t dma_batch_size = 16;
+    const size_t dma_batch_size = 8;
     struct ibv_qp *dma_qp;
     struct ibv_qp_ex *dma_qpx;
     struct mlx5dv_qp_ex *dma_mqpx;

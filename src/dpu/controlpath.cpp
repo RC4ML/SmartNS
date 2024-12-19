@@ -326,6 +326,8 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
     recv_wq->wqe_shift = std::log2(recv_wq->wqe_size);
     recv_wq->max_sge = param->max_recv_sge;
     recv_wq->head = 0;
+    recv_wq->now_sge_num = 0;
+    recv_wq->now_sge_offset = 0;
     recv_wq->own_flag = 1;
 
     dpu_qp *qp = new dpu_qp();

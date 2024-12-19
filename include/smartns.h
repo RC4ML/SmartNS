@@ -28,19 +28,27 @@ struct alignas(64) dpu_recv_wq {
     uint32_t wqe_shift;
     uint32_t max_sge;
     uint32_t	head;
+
+    uint32_t now_sge_num;
+    uint32_t now_sge_offset;
+
     uint8_t own_flag;
+
     inline smartns_recv_wqe *get_next_wqe() {
         smartns_recv_wqe *wqe = reinterpret_cast<smartns_recv_wqe *>(reinterpret_cast<uint8_t *>(bf_recv_wq_buf) + (head << wqe_shift));
         assert(wqe->op_own == own_flag);
+        SMARTNS_TRACE("recv wqe addr 0X%lx lkey %u byte count %u\n", wqe->addr, wqe->lkey, wqe->byte_count);
+
         return wqe;
     }
-    inline uint32_t step_wq() {
-        uint32_t old_head = head++;
+    inline void step_wq() {
+        ++head;
         if (head == wqe_cnt) {
             head = 0;
             own_flag = own_flag ^ SMARTNS_RECV_WQE_OWNER_MASK;
         }
-        return old_head;
+        now_sge_num = 0;
+        now_sge_offset = 0;
     }
 };
 
@@ -90,6 +98,14 @@ struct alignas(64) dpu_cq {
 
         // head update will happend in post_dma_req_with_cq
         return cqe;
+    }
+
+    inline void step_cq() {
+        ++head;
+        if (head == wqe_cnt) {
+            head = 0;
+            own_flag = own_flag ^ SMARTNS_CQE_OWNER_MASK;
+        }
     }
 };
 
@@ -192,11 +208,6 @@ public:
         dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
         size_t cqe_offset = (cq->head & (cq->wqe_cnt - 1)) << cq->wqe_shift;
         dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], cq->host_mkey, reinterpret_cast<uint64_t>(cq->host_cq_buf) + cqe_offset, cq->bf_mkey, reinterpret_cast<uint64_t>(cq->bf_cq_buf) + cqe_offset, cq->wqe_size);
-        cq->head++;
-        if (cq->head % cq->wqe_cnt == 0) {
-            cq->head = 0;
-            cq->own_flag = cq->own_flag ^ SMARTNS_CQE_OWNER_MASK;
-        }
 
         bool is_invalid_signal = invalid_start_index_list[now_use_qp_index] % 16 == 15;
         invalid_qpx_list[now_use_qp_index]->wr_id = 0;
@@ -221,11 +232,6 @@ public:
         dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
         size_t cqe_offset = (cq->head & (cq->wqe_cnt - 1)) << cq->wqe_shift;
         dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], cq->host_mkey, reinterpret_cast<uint64_t>(cq->host_cq_buf) + cqe_offset, cq->bf_mkey, reinterpret_cast<uint64_t>(cq->bf_cq_buf) + cqe_offset, cq->wqe_size);
-        cq->head++;
-        if (cq->head % cq->wqe_cnt == 0) {
-            cq->head = 0;
-            cq->own_flag = cq->own_flag ^ SMARTNS_CQE_OWNER_MASK;
-        }
 
         if (is_signal) {
             dma_count_list[now_use_qp_index] = 0;
@@ -335,6 +341,10 @@ public:
     phmap::flat_hash_map<uint64_t, dpu_qp *>remote_qpn_to_qp_list;
 
     size_t handle_recv();
+
+    void dma_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
+    // need create cq before use this function
+    void dma_payload_with_cq_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
 };
 
 class datapath_manager {
