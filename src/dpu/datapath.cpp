@@ -496,6 +496,13 @@ void datapath_handler::dma_write_payload_to_host(dpu_qp *qp, void *paylod_buf, s
     return;
 }
 
+void datapath_handler::dma_send_cq_to_host(dpu_qp *qp) {
+    dma_handler->post_only_cq(qp->send_cq);
+    // don't forget to step send_wq !!!
+    // 
+    qp->send_cq->step_cq();
+}
+
 void datapath_handler::dma_recv_cq_to_host(dpu_qp *qp) {
     dma_handler->post_only_cq(qp->recv_cq);
     qp->recv_wq->step_wq();

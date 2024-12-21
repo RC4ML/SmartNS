@@ -558,6 +558,8 @@ public:
 
     void dma_write_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
 
+    void dma_send_cq_to_host(dpu_qp *qp);
+
     void dma_recv_cq_to_host(dpu_qp *qp);
 };
 
