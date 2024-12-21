@@ -1,6 +1,7 @@
 #include "smartns.h"
 #include "numautil.h"
 #include "dma/dma.h"
+#include "rxe/rxe.h"
 #include "raw_packet/raw_packet.h"
 
 void datapath_manager::create_raw_packet_main_qp() {
@@ -181,6 +182,8 @@ txpath_handler::txpath_handler(ibv_context *context, ibv_pd *pd, void *buf_addr,
     this->pd = pd;
     tx_depth = SMARTNS_TX_DEPTH;
     send_buf_addr = reinterpret_cast<size_t>(buf_addr);
+    batch_index = 0;
+    wr_index = 0;
 
     num_wrs = SMARTNS_TX_BATCH;
     num_sges_per_wr = SMARTNS_TX_SEG;
@@ -395,12 +398,11 @@ dma_handler::~dma_handler() {
 
 size_t datapath_handler::handle_send() {
     for (auto qp : active_qp_list) {
-        dpu_send_wq *send_wq = qp->send_wq;
-        assert(!send_wq->is_empty());
-        for (;send_wq->cur_sended_head != send_wq->head;send_wq->cur_sended_head = (send_wq->cur_sended_head + 1) % send_wq->wqe_cnt) {
-            // TODO
-        }
+        rxe_handle_req(this, qp);
     }
+    txpath_handler->commit_flush();
+    txpath_handler->poll_tx_cq();
+
 
     return 0;
 }
@@ -453,7 +455,7 @@ size_t datapath_handler::handle_recv() {
     return recv;
 }
 
-void datapath_handler::dma_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size) {
+void datapath_handler::dma_send_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size) {
     dpu_recv_wq *recv_wq = qp->recv_wq;
     smartns_recv_wqe *recv_wqe = qp->recv_wq->get_next_wqe();
     size_t now_size = payload_size;
@@ -464,6 +466,7 @@ void datapath_handler::dma_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t 
         uint32_t remain_sge_byte = recv_wqe[recv_wq->now_sge_num].byte_count - recv_wq->now_sge_offset;
         if (remain_sge_byte >= now_size) {
             dma_handler->post_dma_req_without_cq(recv_wqe[recv_wq->now_sge_num].lkey, recv_wqe[recv_wq->now_sge_num].addr + recv_wq->now_sge_offset, rxpath_handler->mr->lkey, now_buf_addr, now_size);
+            recv_wq->now_total_dma_byte += now_size;
             recv_wq->now_sge_offset += now_size;
             now_size = 0;
             if (recv_wq->now_sge_offset == recv_wqe[recv_wq->now_sge_num].byte_count) {
@@ -473,6 +476,7 @@ void datapath_handler::dma_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t 
             break;
         } else {
             dma_handler->post_dma_req_without_cq(recv_wqe[recv_wq->now_sge_num].lkey, recv_wqe[recv_wq->now_sge_num].addr + recv_wq->now_sge_offset, rxpath_handler->mr->lkey, now_buf_addr, remain_sge_byte);
+            recv_wq->now_total_dma_byte += remain_sge_byte;
             now_buf_addr += remain_sge_byte;
             now_size -= remain_sge_byte;
             recv_wq->now_sge_offset = 0;
@@ -482,29 +486,20 @@ void datapath_handler::dma_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t 
     return;
 }
 
-void datapath_handler::dma_payload_with_cq_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size) {
+void datapath_handler::dma_write_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size) {
     dpu_recv_wq *recv_wq = qp->recv_wq;
-    smartns_recv_wqe *recv_wqe = qp->recv_wq->get_next_wqe();
-    size_t now_size = payload_size;
-    uint64_t now_buf_addr = reinterpret_cast<uint64_t>(paylod_buf);
 
-    for (;recv_wq->now_sge_num < recv_wq->max_sge;recv_wq->now_sge_num++) {
-        assert(recv_wqe[recv_wq->now_sge_num].lkey != 100);
-        uint32_t remain_sge_byte = recv_wqe[recv_wq->now_sge_num].byte_count - recv_wq->now_sge_offset;
-        if (remain_sge_byte >= now_size) {
-            dma_handler->post_dma_req_with_cq(recv_wqe[recv_wq->now_sge_num].lkey, recv_wqe[recv_wq->now_sge_num].addr + recv_wq->now_sge_offset, rxpath_handler->mr->lkey, now_buf_addr, now_size, qp->recv_cq);
-            now_size = 0;
-            break;
-        } else {
-            dma_handler->post_dma_req_without_cq(recv_wqe[recv_wq->now_sge_num].lkey, recv_wqe[recv_wq->now_sge_num].addr + recv_wq->now_sge_offset, rxpath_handler->mr->lkey, now_buf_addr, remain_sge_byte);
-            now_buf_addr += remain_sge_byte;
-            now_size -= remain_sge_byte;
-        }
-    }
-    assert(now_size == 0);
+    dma_handler->post_dma_req_without_cq(recv_wq->mr->devx_mr->lkey, recv_wq->host_va + recv_wq->offset, rxpath_handler->mr->lkey, paylod_buf, payload_size);
+
+    recv_wq->offset += payload_size;
+    recv_wq->resid -= payload_size;
+    return;
+}
+
+void datapath_handler::dma_recv_cq_to_host(dpu_qp *qp) {
+    dma_handler->post_only_cq(qp->recv_cq);
     qp->recv_wq->step_wq();
     qp->recv_cq->step_cq();
-    return;
 }
 
 void datapath_handler::loop_datapath_send_wq() {
@@ -535,7 +530,11 @@ void datapath_handler::loop_datapath_send_wq() {
             send_wqe->is_signal = wqe->is_signal;
 
             // TODO
-
+            send_wqe->state = dpu_send_wqe_state_posted;
+            send_wqe->first_psn = 0;
+            send_wqe->last_psn = 0;
+            send_wqe->cur_pkt_num = 0;
+            send_wqe->cur_pkt_offset = 0;
             send_wq->step_head();
         }
     }

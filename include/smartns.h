@@ -40,21 +40,36 @@ struct alignas(64) dpu_datapath_send_wq {
         }
     }
 };
+enum dpu_send_wqe_state {
+    dpu_send_wqe_state_posted,
+    dpu_send_wqe_state_processing,
+    dpu_send_wqe_state_pending,
+    dpu_send_wqe_state_done,
+    dpu_send_wqe_state_error,
+};
 
 struct alignas(64) dpu_send_wqe {
     uint64_t local_addr;
+    uint64_t remote_addr;
     uint32_t local_lkey;
     uint32_t byte_count;
     uint32_t imm;
 
-    uint64_t remote_addr;
     uint32_t remote_rkey;
     uint32_t opcode;
     uint32_t cur_pos;
 
+    dpu_send_wqe_state state;
+    uint32_t first_psn;
+    uint32_t last_psn;
+    uint32_t cur_pkt_num;
+    uint32_t cur_pkt_offset;
+
     uint8_t is_signal;
     // TODO
 };
+
+static_assert(sizeof(dpu_send_wqe) == 64, "dpu_send_wqe size must be 64 bytes");
 
 struct alignas(64) dpu_send_wq {
     struct dpu_context *dpu_ctx;
@@ -64,11 +79,22 @@ struct alignas(64) dpu_send_wq {
     uint32_t wqe_cnt;
     uint32_t wqe_shift;
     uint32_t head;
-    uint32_t cur_sended_head;
     uint32_t tail;
+
+    // used for RoCEV2
+    uint32_t wqe_index;
+    uint32_t psn;
+    int opcode;
+    int	noack_pkts;
+
 
     dpu_send_wqe *get_next_wqe() {
         dpu_send_wqe *wqe = reinterpret_cast<dpu_send_wqe *>(reinterpret_cast<uint8_t *>(bf_send_wq_buf) + (head << wqe_shift));
+        return wqe;
+    }
+
+    dpu_send_wqe *get_wqe(uint32_t index) {
+        dpu_send_wqe *wqe = reinterpret_cast<dpu_send_wqe *>(reinterpret_cast<uint8_t *>(bf_send_wq_buf) + (index << wqe_shift));
         return wqe;
     }
 
@@ -76,6 +102,13 @@ struct alignas(64) dpu_send_wq {
         ++head;
         if (head == wqe_cnt) {
             head = 0;
+        }
+    }
+
+    void step_wqe_index() {
+        ++wqe_index;
+        if (wqe_index == wqe_cnt) {
+            wqe_index = 0;
         }
     }
 
@@ -107,6 +140,22 @@ struct alignas(64) dpu_recv_wq {
 
     uint32_t now_sge_num;
     uint32_t now_sge_offset;
+    uint32_t now_total_dma_byte;
+
+    // used for RoCEV2
+    uint32_t psn;
+    uint32_t ack_psn;
+    uint32_t msn;
+    int opcode;
+    int sent_psn_nak;
+
+    // used for Read/Write
+    uint64_t host_va;
+    uint64_t offset;
+    uint32_t byte_count;
+    uint32_t host_rkey;
+    uint32_t resid;
+    dpu_mr *mr;
 
     uint8_t own_flag;
 
@@ -125,7 +174,14 @@ struct alignas(64) dpu_recv_wq {
         }
         now_sge_num = 0;
         now_sge_offset = 0;
+        now_total_dma_byte = 0;
     }
+};
+
+struct alignas(64) dpu_comp_info {
+    uint32_t psn;
+    int opcode;
+    int timeout;
 };
 
 struct alignas(64) dpu_qp {
@@ -134,6 +190,7 @@ struct alignas(64) dpu_qp {
     size_t qp_number;
     size_t remote_qp_number;
     ibv_qp_type qp_type;
+    unsigned int mtu;
     unsigned int max_send_wr;
     unsigned int max_recv_wr;
     unsigned int max_send_sge;
@@ -145,6 +202,7 @@ struct alignas(64) dpu_qp {
 
     struct dpu_datapath_send_wq *datapath_send_wq;
     struct dpu_send_wq *send_wq;
+    struct dpu_comp_info *comp_info;
     struct dpu_recv_wq *recv_wq;
 };
 
@@ -373,6 +431,75 @@ public:
 
     // calculate rss and select special port for remote server 
     uint16_t src_port;
+
+    uint32_t batch_index;
+    uint32_t wr_index;
+
+    inline void *get_next_pktheader_addr() {
+        return reinterpret_cast<void *>(send_buf_addr + send_offset_handler.offset());
+    }
+
+    inline void commit_pkt_with_payload(uint64_t remote_addr, uint32_t rkey, uint32_t header_size, uint32_t payload_size) {
+        send_sge_list[wr_index * num_sges_per_wr].addr = send_offset_handler.offset() + send_buf_addr;
+        send_sge_list[wr_index * num_sges_per_wr].length = header_size;
+
+        send_sge_list[wr_index * num_sges_per_wr + 1].addr = remote_addr;
+        send_sge_list[wr_index * num_sges_per_wr + 1].length = payload_size;
+        send_sge_list[wr_index * num_sges_per_wr + 1].lkey = rkey;
+
+        send_wr[wr_index].num_sge = 2;
+        if (wr_index > 0) {
+            send_wr[wr_index - 1].next = send_wr + wr_index;
+        }
+        send_wr[wr_index].next = nullptr;
+        send_wr[wr_index].wr_id = send_offset_handler.offset() + send_buf_addr;
+        send_wr[wr_index].send_flags = batch_index == SMARTNS_TX_BATCH - 1 ? (IBV_SEND_IP_CSUM | IBV_SEND_SIGNALED) : IBV_SEND_IP_CSUM;
+
+        batch_index = (batch_index + 1) % SMARTNS_TX_BATCH;
+        wr_index++;
+        send_offset_handler.step();
+
+        if (wr_index == SMARTNS_TX_BATCH) {
+            commit_flush();
+        }
+    }
+
+    inline void commit_pkt_without_payload(uint32_t header_size) {
+        send_sge_list[wr_index * num_sges_per_wr].addr = send_offset_handler.offset() + send_buf_addr;
+        send_sge_list[wr_index * num_sges_per_wr].length = header_size;
+
+        send_wr[wr_index].num_sge = 1;
+        if (wr_index > 0) {
+            send_wr[wr_index - 1].next = send_wr + wr_index;
+        }
+        send_wr[wr_index].next = nullptr;
+        send_wr[wr_index].wr_id = send_offset_handler.offset() + send_buf_addr;
+        send_wr[wr_index].send_flags = batch_index == SMARTNS_TX_BATCH - 1 ? (IBV_SEND_IP_CSUM | IBV_SEND_SIGNALED) : IBV_SEND_IP_CSUM;
+
+        batch_index = (batch_index + 1) % SMARTNS_TX_BATCH;
+        wr_index++;
+        send_offset_handler.step();
+
+        if (wr_index == SMARTNS_TX_BATCH) {
+            commit_flush();
+        }
+    }
+
+    inline void commit_flush() {
+        assert(ibv_post_send(send_qp, send_wr, &send_bad_wr) == 0);
+        wr_index = 0;
+    }
+    inline void poll_tx_cq() {
+        ibv_wc wc[16];
+        int recv = ibv_poll_cq(send_cq, 16, wc);
+        for (int i = 0;i < recv;i++) {
+            if (wc[i].status != IBV_WC_SUCCESS || wc[i].opcode != IBV_WC_SEND) {
+                SMARTNS_ERROR("tx cq error\n");
+                exit(-1);
+            }
+            send_comp_offset_handler.step(SMARTNS_TX_BATCH);
+        }
+    }
 };
 
 class alignas(64) rxpath_handler {
@@ -427,9 +554,11 @@ public:
 
     size_t handle_recv();
 
-    void dma_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
-    // need create cq before use this function
-    void dma_payload_with_cq_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
+    void dma_send_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
+
+    void dma_write_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
+
+    void dma_recv_cq_to_host(dpu_qp *qp);
 };
 
 class datapath_manager {

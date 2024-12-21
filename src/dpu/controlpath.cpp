@@ -337,7 +337,10 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
     send_wq->wqe_cnt = param->max_send_wr;
     send_wq->wqe_shift = std::log2(send_wq->wqe_size);
     send_wq->head = 0;
-    send_wq->cur_sended_head = 0;
+    send_wq->wqe_index = 0;
+    send_wq->psn = 0;
+    send_wq->opcode = 0;
+    send_wq->noack_pkts = 0;
     send_wq->tail = 0;
 
     struct dpu_recv_wq *recv_wq = new dpu_recv_wq();
@@ -351,13 +354,25 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
     recv_wq->head = 0;
     recv_wq->now_sge_num = 0;
     recv_wq->now_sge_offset = 0;
+    recv_wq->now_total_dma_byte = 0;
+    recv_wq->psn = 0;
+    recv_wq->ack_psn = 0;
+    recv_wq->msn = 0;
+    recv_wq->opcode = 0;
+    recv_wq->sent_psn_nak = 0;
     recv_wq->own_flag = 1;
+
+    struct dpu_comp_info *comp_info = new dpu_comp_info();
+    comp_info->psn = 0;
+    comp_info->opcode = 0;
+    comp_info->timeout = 0;
 
     dpu_qp *qp = new dpu_qp();
     qp->dpu_ctx = dpu_ctx;
     qp->dpu_pd = pd;
     qp->qp_number = generate_qp_number();
     qp->qp_type = static_cast<ibv_qp_type>(param->qp_type);
+    qp->mtu = SMARTNS_MTU;
     qp->max_send_wr = param->max_send_wr;
     qp->max_recv_wr = param->max_recv_wr;
     qp->max_send_sge = param->max_send_sge;
@@ -369,6 +384,7 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
 
     qp->datapath_send_wq = datapath_send_wq;
     qp->send_wq = send_wq;
+    qp->comp_info = comp_info;
     qp->recv_wq = recv_wq;
 
     dpu_ctx->qp_list[qp->qp_number] = qp;
@@ -405,6 +421,7 @@ void controlpath_manager::handle_destory_qp(SMARTNS_DESTROY_QP_PARAMS *param) {
 
     free(qp->send_wq->bf_send_wq_buf);
     delete qp->send_wq;
+    delete qp->comp_info;
     // don't need to free
     delete qp->recv_wq;
 
