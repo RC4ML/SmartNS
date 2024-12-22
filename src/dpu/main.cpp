@@ -48,6 +48,8 @@ void server_datapath(datapath_handler *handler) {
     SmartNS::wait_scheduling(FLAGS_numaNode, handler->cpu_id);
 
     while (!stop_flag) {
+        handler->loop_datapath_send_wq();
+        handler->handle_send();
         handler->handle_recv();
     }
     return;

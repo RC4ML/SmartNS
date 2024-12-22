@@ -402,56 +402,11 @@ size_t datapath_handler::handle_send() {
     }
     txpath_handler->commit_flush();
     txpath_handler->poll_tx_cq();
-
-
     return 0;
 }
 
 size_t datapath_handler::handle_recv() {
-    int recv = ibv_poll_cq(rxpath_handler->recv_cq, CTX_POLL_BATCH, wc_send_recv);
-
-    for (int i = 0;i < recv;i++) {
-        if (wc_send_recv[i].status != IBV_WC_SUCCESS || wc_send_recv[i].opcode != IBV_WC_RECV) {
-            SMARTNS_ERROR("Recv error %d\n", wc_send_recv[i].status);
-            exit(1);
-        }
-
-        udp_packet *packet = reinterpret_cast<udp_packet *>(wc_send_recv[i].wr_id);
-        printf("Recv packet %d\n", wc_send_recv[i].byte_len);
-
-        dpu_qp *qp = local_qpn_to_qp_list[0];
-        assert(qp);
-
-        smartns_cqe *cqe = qp->recv_cq->get_next_cqe();
-        cqe->byte_count = wc_send_recv->byte_len;
-        cqe->cq_opcode = MLX5_CQE_RESP_SEND;
-        cqe->mlx5_opcode = 0;
-        cqe->op_own = qp->recv_cq->own_flag;
-        cqe->qpn = qp->qp_number;
-        cqe->wqe_counter = qp->recv_wq->head;
-
-        dma_payload_with_cq_to_host(qp, packet, wc_send_recv[i].byte_len);
-    }
-
-    uint32_t dma_finish = dma_handler->poll_dma_cq();
-
-    while (dma_finish) {
-        uint32_t now_post_recv = min_(SMARTNS_RX_BATCH, dma_finish);
-        for (uint32_t i = 0;i < now_post_recv;i++) {
-            rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].addr = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
-            rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].length = SMARTNS_RX_PACKET_BUFFER;
-            rxpath_handler->recv_wr[i].wr_id = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
-            rxpath_handler->recv_wr[i].next = nullptr;
-
-            if (i > 0) {
-                rxpath_handler->recv_wr[i - 1].next = rxpath_handler->recv_wr + i;
-            }
-            rxpath_handler->recv_offset_handler.step();
-        }
-        assert(ibv_post_wq_recv(rxpath_handler->recv_wq, rxpath_handler->recv_wr, &rxpath_handler->recv_bad_wr) == 0);
-        dma_finish -= now_post_recv;
-    }
-
+    size_t recv = rxe_handle_recv(this);
     return recv;
 }
 
@@ -489,7 +444,8 @@ void datapath_handler::dma_send_payload_to_host(dpu_qp *qp, void *paylod_buf, si
 void datapath_handler::dma_write_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size) {
     dpu_recv_wq *recv_wq = qp->recv_wq;
 
-    dma_handler->post_dma_req_without_cq(recv_wq->mr->devx_mr->lkey, recv_wq->host_va + recv_wq->offset, rxpath_handler->mr->lkey, paylod_buf, payload_size);
+    dma_handler->post_dma_req_without_cq(recv_wq->mr->devx_mr->lkey, recv_wq->host_va + recv_wq->offset,
+        rxpath_handler->mr->lkey, reinterpret_cast<size_t>(paylod_buf), payload_size);
 
     recv_wq->offset += payload_size;
     recv_wq->resid -= payload_size;

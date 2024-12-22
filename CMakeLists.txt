@@ -107,6 +107,12 @@ set(DEVXSOURCES
     ${CMAKE_SOURCE_DIR}/src/raw_packet/raw_packet.cpp
 )
 
+set(RXESOURCES
+    ${CMAKE_SOURCE_DIR}/src/rxe/rxe_recv.cpp
+    ${CMAKE_SOURCE_DIR}/src/rxe/rxe_req.cpp
+    ${CMAKE_SOURCE_DIR}/src/rxe/rxe_opcode.c
+) 
+
 set(DPUSOURCES
     ${CMAKE_SOURCE_DIR}/src/dpu/main.cpp
     ${CMAKE_SOURCE_DIR}/src/dpu/datapath.cpp
@@ -118,7 +124,7 @@ set(LIBRARIES ${LIBRARIES} mlx5 ibverbs pthread numa gflags hdr_histogram_static
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
 
-add_executable(smartns ${UTILSOURCES} ${DEVXSOURCES} ${DPUSOURCES})
+add_executable(smartns ${UTILSOURCES} ${DEVXSOURCES} ${RXESOURCES} ${DPUSOURCES})
 target_link_libraries(smartns ${LIBRARIES})
 
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")

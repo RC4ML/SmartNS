@@ -78,7 +78,7 @@ struct rxe_atmeth {
     uint32_t			rkey;
     uint64_t			swap_add;
     uint64_t			comp;
-} __packed;
+} __attribute__((packed));
 
 
 enum rxe_hdr_length {

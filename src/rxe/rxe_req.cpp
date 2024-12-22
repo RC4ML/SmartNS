@@ -7,7 +7,7 @@
 
 
 int next_opcode(dpu_qp *qp, dpu_send_wqe *wqe, int opcode) {
-    int fits = (wqe->byte_count - wqe->cur_pkt_offset) <= qp->mtu;
+    int fits = (wqe->byte_count - wqe->cur_pkt_offset) <= static_cast<uint32_t>(qp->mtu);
 
     switch (opcode) {
     case IBV_WR_SEND:

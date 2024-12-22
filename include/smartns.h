@@ -128,6 +128,10 @@ struct alignas(64) dpu_send_wq {
     }
 };
 
+struct dpu_mr {
+    unsigned int host_mkey;
+    struct devx_mr *devx_mr;
+};
 
 struct alignas(64) dpu_recv_wq {
     struct dpu_context *dpu_ctx;
@@ -190,7 +194,7 @@ struct alignas(64) dpu_qp {
     size_t qp_number;
     size_t remote_qp_number;
     ibv_qp_type qp_type;
-    unsigned int mtu;
+    int mtu;
     unsigned int max_send_wr;
     unsigned int max_recv_wr;
     unsigned int max_send_sge;
@@ -244,10 +248,6 @@ struct alignas(64) dpu_cq {
     }
 };
 
-struct dpu_mr {
-    unsigned int host_mkey;
-    struct devx_mr *devx_mr;
-};
 
 struct dpu_context {
     int host_pid;

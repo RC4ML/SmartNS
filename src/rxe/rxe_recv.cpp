@@ -5,7 +5,7 @@
 #include "raw_packet/raw_packet.h"
 #include "smartns.h"
 
-int send_ack(dpu_qp *qp, struct rxe_bth *bth, uint8_t syndrome, uint32_t psn) {
+void send_ack(datapath_handler *handler, dpu_qp *qp, uint8_t syndrome, uint32_t psn) {
     void *header_addr = handler->txpath_handler->get_next_pktheader_addr();
     struct rxe_bth *bth = reinterpret_cast<rxe_bth *>(reinterpret_cast<size_t>(header_addr) + sizeof(udp_packet));
     int header_size = 64;
@@ -74,12 +74,12 @@ int rxe_handle_recv(datapath_handler *handler) {
                     continue;
                 }
                 qp->recv_wq->sent_psn_nak = 1;
-                send_ack(qp, bth, AETH_NAK_PSN_SEQ_ERROR, qp->recv_wq->psn);
+                send_ack(handler, qp, AETH_NAK_PSN_SEQ_ERROR, qp->recv_wq->psn);
                 continue;
             } else if (diff < 0) {
                 uint32_t prev_psn = (qp->recv_wq->ack_psn - 1) & BTH_PSN_MASK;
                 if (mask & RXE_SEND_MASK || mask & RXE_WRITE_MASK) {
-                    send_ack(qp, bth, AETH_ACK_UNLIMITED, prev_psn);
+                    send_ack(handler, qp, AETH_ACK_UNLIMITED, prev_psn);
                     continue;
                 } else {
                     fprintf(stderr, "TODO waiting for implementation\n");
@@ -97,7 +97,7 @@ int rxe_handle_recv(datapath_handler *handler) {
                     qp->recv_wq->host_rkey = reth->rkey;
                     qp->recv_wq->byte_count = reth->len;
                     qp->recv_wq->resid = reth->len;
-                    qp->recv_wq->mr = handler->context->mr_list[reth->rkey];
+                    qp->recv_wq->mr = qp->dpu_ctx->mr_list[reth->rkey];
                     assert(qp->recv_wq->mr);
                 }
             }
@@ -130,7 +130,7 @@ int rxe_handle_recv(datapath_handler *handler) {
             }
 
             if (bth->apsn & BTH_ACK_MASK) {
-                send_ack(qp, bth, AETH_ACK_UNLIMITED, psn);
+                send_ack(handler, qp, AETH_ACK_UNLIMITED, psn);
             }
             // recv ack or nack packet
         } else {
@@ -186,22 +186,23 @@ int rxe_handle_recv(datapath_handler *handler) {
             }
         }
     }
+    handler->txpath_handler->commit_flush();
 
-    uint32_t dma_finish = dma_handler->poll_dma_cq();
+    uint32_t dma_finish = handler->dma_handler->poll_dma_cq();
     while (dma_finish) {
         uint32_t now_post_recv = min_(SMARTNS_RX_BATCH, dma_finish);
         for (uint32_t i = 0;i < now_post_recv;i++) {
-            rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].addr = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
-            rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].length = SMARTNS_RX_PACKET_BUFFER;
-            rxpath_handler->recv_wr[i].wr_id = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
-            rxpath_handler->recv_wr[i].next = nullptr;
+            handler->rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].addr = handler->rxpath_handler->recv_offset_handler.offset() + handler->rxpath_handler->recv_buf_addr;
+            handler->rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].length = SMARTNS_RX_PACKET_BUFFER;
+            handler->rxpath_handler->recv_wr[i].wr_id = handler->rxpath_handler->recv_offset_handler.offset() + handler->rxpath_handler->recv_buf_addr;
+            handler->rxpath_handler->recv_wr[i].next = nullptr;
 
             if (i > 0) {
-                rxpath_handler->recv_wr[i - 1].next = rxpath_handler->recv_wr + i;
+                handler->rxpath_handler->recv_wr[i - 1].next = handler->rxpath_handler->recv_wr + i;
             }
-            rxpath_handler->recv_offset_handler.step();
+            handler->rxpath_handler->recv_offset_handler.step();
         }
-        assert(ibv_post_wq_recv(rxpath_handler->recv_wq, rxpath_handler->recv_wr, &rxpath_handler->recv_bad_wr) == 0);
+        assert(ibv_post_wq_recv(handler->rxpath_handler->recv_wq, handler->rxpath_handler->recv_wr, &handler->rxpath_handler->recv_bad_wr) == 0);
         dma_finish -= now_post_recv;
     }
 
