@@ -364,7 +364,7 @@ void controlpath_manager::handle_create_qp(SMARTNS_CREATE_QP_PARAMS *param) {
 
     struct dpu_comp_info *comp_info = new dpu_comp_info();
     comp_info->psn = 0;
-    comp_info->opcode = 0;
+    comp_info->opcode = -1;
     comp_info->timeout = 0;
 
     dpu_qp *qp = new dpu_qp();

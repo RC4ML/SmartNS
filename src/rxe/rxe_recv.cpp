@@ -22,6 +22,33 @@ int send_ack(dpu_qp *qp, struct rxe_bth *bth, uint8_t syndrome, uint32_t psn) {
     handler->txpath_handler->commit_pkt_without_payload(header_size);
 }
 
+void complete_send_wqe(datapath_handler *handler, dpu_qp *qp, dpu_send_wqe *wqe) {
+    if (wqe->state == dpu_send_wqe_state_pending) {
+        if (psn_compare(wqe->last_psn, qp->recv_wq->psn) >= 0) {
+            qp->recv_wq->psn = (wqe->last_psn + 1) & BTH_PSN_MASK;
+            qp->recv_wq->opcode = -1;
+        }
+    }
+    bool post = wqe->is_signal;
+
+    if (post) {
+        smartns_cqe *cqe = qp->send_cq->get_next_cqe();
+        cqe->byte_count = wqe->byte_count;
+        cqe->cq_opcode = MLX5_CQE_REQ;
+        cqe->mlx5_opcode = 0;
+        cqe->op_own = qp->send_cq->own_flag;
+        cqe->qpn = qp->qp_number;
+        cqe->wqe_counter = wqe->cur_pos;
+
+        handler->dma_send_cq_to_host(qp);
+    }
+
+    qp->send_wq->step_tail();
+    if (qp->send_wq->is_empty()) {
+        handler->active_qp_list.erase(qp);
+    }
+}
+
 int rxe_handle_recv(datapath_handler *handler) {
     int recv = ibv_poll_cq(handler->rxpath_handler->recv_cq, CTX_POLL_BATCH, handler->wc_send_recv);
 
@@ -105,10 +132,78 @@ int rxe_handle_recv(datapath_handler *handler) {
             if (bth->apsn & BTH_ACK_MASK) {
                 send_ack(qp, bth, AETH_ACK_UNLIMITED, psn);
             }
-
             // recv ack or nack packet
         } else {
+            dpu_send_wq *send_wq = qp->send_wq;
 
+            while (true) {
+                dpu_send_wqe *send_wqe = send_wq->get_wqe(send_wq->tail);
+                if (send_wq->is_empty() || send_wqe->state == dpu_send_wqe_state_posted) {
+                    break;
+                }
+                int diff = psn_compare(psn, send_wqe->last_psn);
+                if (diff > 0) {
+                    if (send_wqe->state == dpu_send_wqe_state_pending) {
+                        complete_send_wqe(handler, qp, send_wqe);
+                        continue;
+                    } else {
+                        fprintf(stderr, "TODO waiting for implementation\n");
+                        exit(1);
+                    }
+                }
+                diff = psn_compare(psn, qp->comp_info->psn);
+                if (diff < 0) {
+                    if (psn == send_wqe->last_psn) {
+                        complete_send_wqe(handler, qp, send_wqe);
+                        break;
+                    } else {
+                        break;
+                    }
+                }
+
+                assert(opcode == IB_OPCODE_RC_ACKNOWLEDGE);
+                rxe_aeth *aeth = reinterpret_cast<rxe_aeth *>(bth + 1);
+                uint8_t syn = (AETH_SYN_MASK & aeth->smsn) >> 24;
+                switch (syn & AETH_TYPE_MASK) {
+                case AETH_ACK:
+                    break;
+                case AETH_NAK:
+                    fprintf(stderr, "TODO waiting for implementation\n");
+                    exit(1);
+                }
+
+                if (send_wqe->state == dpu_send_wqe_state_pending && send_wqe->last_psn == psn) {
+                    complete_send_wqe(handler, qp, send_wqe);
+                }
+
+                if (mask & RXE_END_MASK) {
+                    qp->comp_info->opcode = -1;
+                } else {
+                    qp->comp_info->opcode = opcode;
+                }
+                qp->comp_info->psn = (psn + 1) & BTH_PSN_MASK;
+                break;
+            }
         }
     }
+
+    uint32_t dma_finish = dma_handler->poll_dma_cq();
+    while (dma_finish) {
+        uint32_t now_post_recv = min_(SMARTNS_RX_BATCH, dma_finish);
+        for (uint32_t i = 0;i < now_post_recv;i++) {
+            rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].addr = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
+            rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].length = SMARTNS_RX_PACKET_BUFFER;
+            rxpath_handler->recv_wr[i].wr_id = rxpath_handler->recv_offset_handler.offset() + rxpath_handler->recv_buf_addr;
+            rxpath_handler->recv_wr[i].next = nullptr;
+
+            if (i > 0) {
+                rxpath_handler->recv_wr[i - 1].next = rxpath_handler->recv_wr + i;
+            }
+            rxpath_handler->recv_offset_handler.step();
+        }
+        assert(ibv_post_wq_recv(rxpath_handler->recv_wq, rxpath_handler->recv_wr, &rxpath_handler->recv_bad_wr) == 0);
+        dma_finish -= now_post_recv;
+    }
+
+    return recv;
 }
