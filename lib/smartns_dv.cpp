@@ -567,7 +567,7 @@ int smartns_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send
             scat->remote_addr = wr->wr.rdma.remote_addr;
             scat->remote_rkey = wr->wr.rdma.rkey;
         }
-        scat->cur_pos = ind;
+        scat->cur_pos = s_qp->send_wq->head + nreq;
         scat->is_signal = wr->send_flags & IBV_SEND_SIGNALED;
         scat->op_own = s_qp->send_wq->own_flag;
 
@@ -670,14 +670,37 @@ int smartns_poll_cq(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc) {
         if (cqe->op_own != s_cq->own_flag) {
             break;
         }
+        struct smartns_qp *qp = s_ctx->qp_list[cqe->qpn];
+        assert(qp);
         switch (cqe->cq_opcode) {
-        case MLX5_CQE_REQ:
-            // TODO add send cq handler
+        case MLX5_CQE_REQ: {
+            wc->byte_len = cqe->byte_count;
+            if (cqe->mlx5_opcode == IBV_WR_SEND) {
+                wc->opcode = IBV_WC_SEND;
+            } else if (cqe->mlx5_opcode == IBV_WR_RDMA_WRITE) {
+                wc->opcode = IBV_WC_RDMA_WRITE;
+            } else if (cqe->mlx5_opcode == IBV_WR_RDMA_READ) {
+                wc->opcode = IBV_WC_RDMA_READ;
+            } else {
+                fprintf(stderr, "Not support %u mlx5 opcode now!\n", cqe->mlx5_opcode);
+                exit(1);
+            }
+            wc->wc_flags = 0;
+
+            uint16_t wqe_ctr = cqe->wqe_counter & (qp->send_wq->wqe_cnt - 1);
+            wc->wr_id = qp->send_wq->wrid[wqe_ctr];
+            wc->status = IBV_WC_SUCCESS;
+            if (qp->send_wq->tail > cqe->wqe_counter) {
+                printf("Warning, send wq tail %u, cqe wqe counter %u\n", qp->send_wq->tail, cqe->wqe_counter);
+                // skip update tail
+            } else {
+                qp->send_wq->tail = cqe->wqe_counter + 1;
+            }
             break;
+        }
+
 
         case MLX5_CQE_RESP_SEND: {
-            struct smartns_qp *qp = s_ctx->qp_list[cqe->qpn];
-            assert(qp);
 
             wc->byte_len = cqe->byte_count;
             wc->opcode = IBV_WC_RECV;

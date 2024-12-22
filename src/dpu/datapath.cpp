@@ -492,7 +492,6 @@ void datapath_handler::loop_datapath_send_wq() {
             send_wqe->cur_pos = wqe->cur_pos;
             send_wqe->is_signal = wqe->is_signal;
 
-            // TODO
             send_wqe->state = dpu_send_wqe_state_posted;
             send_wqe->first_psn = 0;
             send_wqe->last_psn = 0;

@@ -66,7 +66,6 @@ struct alignas(64) dpu_send_wqe {
     uint32_t cur_pkt_offset;
 
     uint8_t is_signal;
-    // TODO
 };
 
 static_assert(sizeof(dpu_send_wqe) == 64, "dpu_send_wqe size must be 64 bytes");

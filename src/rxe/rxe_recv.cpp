@@ -35,7 +35,7 @@ void complete_send_wqe(datapath_handler *handler, dpu_qp *qp, dpu_send_wqe *wqe)
         smartns_cqe *cqe = qp->send_cq->get_next_cqe();
         cqe->byte_count = wqe->byte_count;
         cqe->cq_opcode = MLX5_CQE_REQ;
-        cqe->mlx5_opcode = 0;
+        cqe->mlx5_opcode = wqe->opcode;
         cqe->op_own = qp->send_cq->own_flag;
         cqe->qpn = qp->qp_number;
         cqe->wqe_counter = wqe->cur_pos;
