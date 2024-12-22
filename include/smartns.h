@@ -485,6 +485,9 @@ public:
     }
 
     inline void commit_flush() {
+        if (wr_index == 0) {
+            return;
+        }
         assert(ibv_post_send(send_qp, send_wr, &send_bad_wr) == 0);
         wr_index = 0;
     }

@@ -54,11 +54,11 @@ struct offset_handler {
     size_t cur;
 };
 
-static void offset_handler_step(struct offset_handler *handler) {
+__attribute__((unused)) static void offset_handler_step(struct offset_handler *handler) {
     handler->cur += 1;
 }
 
-static size_t offset_handler_offset(struct offset_handler *handler) {
+__attribute__((unused)) static size_t offset_handler_offset(struct offset_handler *handler) {
     return (handler->cur % handler->max_num) * handler->step_size + handler->buf_offset;
 }
 

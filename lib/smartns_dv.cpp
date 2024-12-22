@@ -543,7 +543,7 @@ int smartns_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send
     ind = s_qp->send_wq->head & (s_qp->send_wq->wqe_cnt - 1);
     begin_indx = ind;
 
-    for (nreq = 0;wr++;++nreq, wr = wr->next) {
+    for (nreq = 0;wr;++nreq, wr = wr->next) {
         if (unlikely(s_qp->send_wq->head - s_qp->send_wq->tail + nreq >= s_qp->send_wq->wqe_cnt)) {
             fprintf(stderr, "Error, post send wq full\n");
             exit(1);
