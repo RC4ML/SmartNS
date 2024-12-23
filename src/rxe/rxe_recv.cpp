@@ -52,6 +52,7 @@ void complete_send_wqe(datapath_handler *handler, dpu_qp *qp, dpu_send_wqe *wqe)
 int rxe_handle_recv(datapath_handler *handler) {
     int recv = ibv_poll_cq(handler->rxpath_handler->recv_cq, CTX_POLL_BATCH, handler->wc_send_recv);
 
+    uint32_t ack_pkt_num = 0;
     for (int i = 0;i < recv;i++) {
         if (handler->wc_send_recv[i].status != IBV_WC_SUCCESS || handler->wc_send_recv[i].opcode != IBV_WC_RECV) {
             fprintf(stderr, "Recv error %d\n", handler->wc_send_recv[i].status);
@@ -134,6 +135,7 @@ int rxe_handle_recv(datapath_handler *handler) {
             }
             // recv ack or nack packet
         } else {
+            ack_pkt_num++;
             dpu_send_wq *send_wq = qp->send_wq;
 
             while (true) {
@@ -188,9 +190,9 @@ int rxe_handle_recv(datapath_handler *handler) {
     }
     handler->txpath_handler->commit_flush();
 
-    uint32_t dma_finish = handler->dma_handler->poll_dma_cq();
-    while (dma_finish) {
-        uint32_t now_post_recv = min_(SMARTNS_RX_BATCH, dma_finish);
+    uint32_t recv_finish = handler->dma_handler->poll_dma_cq() + ack_pkt_num;
+    while (recv_finish) {
+        uint32_t now_post_recv = min_(SMARTNS_RX_BATCH, recv_finish);
         for (uint32_t i = 0;i < now_post_recv;i++) {
             handler->rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].addr = handler->rxpath_handler->recv_offset_handler.offset() + handler->rxpath_handler->recv_buf_addr;
             handler->rxpath_handler->recv_sge_list[i * SMARTNS_RX_SEG].length = SMARTNS_RX_PACKET_BUFFER;
@@ -203,7 +205,7 @@ int rxe_handle_recv(datapath_handler *handler) {
             handler->rxpath_handler->recv_offset_handler.step();
         }
         assert(ibv_post_wq_recv(handler->rxpath_handler->recv_wq, handler->rxpath_handler->recv_wr, &handler->rxpath_handler->recv_bad_wr) == 0);
-        dma_finish -= now_post_recv;
+        recv_finish -= now_post_recv;
     }
 
     return recv;
