@@ -283,15 +283,15 @@ public:
     ibv_qp_ex **dma_qpx_list;
     mlx5dv_qp_ex **dma_mqpx_list;
     //plus one when dma anything, and reset to 0 when set signal
-    uint64_t *dma_count_list;
+    uint32_t *dma_count_list;
     //plus one when dma packet payload, and reset to 0 when set signal
     uint64_t *payload_count_list;
 
     ibv_qp **invalid_qp_list;
     ibv_qp_ex **invalid_qpx_list;
     mlx5dv_qp_ex **invalid_mqpx_list;
-    uint64_t *invalid_start_index_list;
-    uint64_t *invalid_finish_index_list;
+    uint32_t *invalid_start_index_list;
+    uint32_t *invalid_finish_index_list;
 
     uint32_t now_use_qp_index;
     uint32_t qp_group_size;
@@ -303,7 +303,8 @@ public:
 
     inline void post_dma_req_without_cq(uint32_t dest_lkey, uint64_t dest_addr,
         uint32_t src_lkey, uint64_t src_addr, size_t length) {
-        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH == (SMARTNS_DMA_BATCH - 1);
+
+        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH >= (SMARTNS_DMA_BATCH - 1);
 
         dma_count_list[now_use_qp_index]++;
         payload_count_list[now_use_qp_index]++;
@@ -326,39 +327,8 @@ public:
         }
     }
 
-    inline void post_dma_req_with_cq(uint32_t dest_lkey, uint64_t dest_addr,
-        uint32_t src_lkey, uint64_t src_addr, size_t length, dpu_cq *cq) {
-        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH >= (SMARTNS_DMA_BATCH - 2);
-
-        dma_count_list[now_use_qp_index] += 2;
-        payload_count_list[now_use_qp_index]++;
-
-        dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
-        // will signal at cq dma
-        dma_qpx_list[now_use_qp_index]->wr_flags = 0;
-        dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], dest_lkey, dest_addr, src_lkey, src_addr, length);
-
-        dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
-        dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
-        size_t cqe_offset = (cq->head & (cq->wqe_cnt - 1)) << cq->wqe_shift;
-        dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], cq->host_mkey, reinterpret_cast<uint64_t>(cq->host_cq_buf) + cqe_offset, cq->bf_mkey, reinterpret_cast<uint64_t>(cq->bf_cq_buf) + cqe_offset, cq->wqe_size);
-
-        bool is_invalid_signal = invalid_start_index_list[now_use_qp_index] % 16 == 15;
-        invalid_qpx_list[now_use_qp_index]->wr_id = 0;
-        invalid_qpx_list[now_use_qp_index]->wr_flags = is_invalid_signal ? IBV_SEND_SIGNALED : 0;
-
-        invalid_mqpx_list[now_use_qp_index]->wr_invcache_direct_prefill(invalid_mqpx_list[now_use_qp_index], src_lkey, src_addr, length, false);
-        invalid_start_index_list[now_use_qp_index]++;
-
-        if (is_signal) {
-            dma_count_list[now_use_qp_index] = 0;
-            payload_count_list[now_use_qp_index] = 0;
-            now_use_qp_index = (now_use_qp_index + 1) % qp_group_size;
-        }
-    }
-
-    inline void post_only_cq(dpu_cq *cq) {
-        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH == (SMARTNS_DMA_BATCH - 1);
+    inline void post_send_recv_cqe(dpu_cq *cq) {
+        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH >= (SMARTNS_DMA_BATCH - 1);
 
         dma_count_list[now_use_qp_index]++;
 
@@ -380,8 +350,11 @@ public:
         for (uint32_t i = 0;i < qp_group_size;i++) {
             uint32_t num_wc = ibv_poll_cq(dma_send_recv_cq, 16, wc);
             for (uint32_t j = 0; j < num_wc; j++) {
-                assert(wc[i].status == IBV_WC_SUCCESS);
-                uint64_t wr_id = wc[i].wr_id;
+                if (wc[j].status != IBV_WC_SUCCESS) {
+                    SMARTNS_ERROR("dma cq error %d %ld\n", wc[j].status, wc[j].wr_id);
+                    exit(-1);
+                }
+                uint64_t wr_id = wc[j].wr_id;
                 uint32_t qp_index = wr_id & 0xFFFFFFFF;
                 uint32_t payload_count = wr_id >> 32;
                 invalid_mqpx_list[qp_index]->wr_invcache_direct_flush(invalid_mqpx_list[qp_index], invalid_finish_index_list[qp_index], payload_count);
@@ -393,7 +366,7 @@ public:
         for (uint32_t i = 0;i < qp_group_size;i++) {
             uint32_t num_wc = ibv_poll_cq(invalid_send_recv_cq, 16, wc);
             for (uint32_t j = 0; j < num_wc; j++) {
-                assert(wc[i].status == IBV_WC_SUCCESS);
+                assert(wc[j].status == IBV_WC_SUCCESS);
             }
         }
 

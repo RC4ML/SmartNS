@@ -87,7 +87,6 @@ void controlpath_manager::handle_open_device(SMARTNS_OPEN_DEVICE_PARAMS *param) 
         dpu_ctx->datapath_send_wq_list.emplace_back(datapath_send_wq);
 
         bf_mr_base = reinterpret_cast<void *>(reinterpret_cast<size_t>(bf_mr_base) + sizeof(smartns_send_wqe) * SMARTNS_TX_DEPTH);
-
     }
 
     // add datapath_send_wq to each datapath's handler

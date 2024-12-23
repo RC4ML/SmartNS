@@ -329,14 +329,14 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
     dma_qp_list = new ibv_qp * [SMARTNS_DMA_GROUP_SIZE];
     dma_qpx_list = new ibv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
     dma_mqpx_list = new mlx5dv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
-    dma_count_list = new uint64_t[SMARTNS_DMA_GROUP_SIZE];
+    dma_count_list = new uint32_t[SMARTNS_DMA_GROUP_SIZE];
     payload_count_list = new uint64_t[SMARTNS_DMA_GROUP_SIZE];
 
     invalid_qp_list = new ibv_qp * [SMARTNS_DMA_GROUP_SIZE];
     invalid_qpx_list = new ibv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
     invalid_mqpx_list = new mlx5dv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
-    invalid_start_index_list = new uint64_t[SMARTNS_DMA_GROUP_SIZE];
-    invalid_finish_index_list = new uint64_t[SMARTNS_DMA_GROUP_SIZE];
+    invalid_start_index_list = new uint32_t[SMARTNS_DMA_GROUP_SIZE];
+    invalid_finish_index_list = new uint32_t[SMARTNS_DMA_GROUP_SIZE];
 
     now_use_qp_index = 0;
     qp_group_size = SMARTNS_DMA_GROUP_SIZE;
@@ -359,7 +359,7 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
     }
 
     for (size_t i = 0;i < SMARTNS_DMA_GROUP_SIZE;i++) {
-        ibv_qp *dma_qp = create_dma_qp(context, pd, dma_send_recv_cq, dma_send_recv_cq, 128);
+        ibv_qp *dma_qp = create_dma_qp(context, pd, invalid_send_recv_cq, invalid_send_recv_cq, 128);
         init_dma_qp(dma_qp);
         dma_qp_self_connected(dma_qp);
 
@@ -453,14 +453,14 @@ void datapath_handler::dma_write_payload_to_host(dpu_qp *qp, void *paylod_buf, s
 }
 
 void datapath_handler::dma_send_cq_to_host(dpu_qp *qp) {
-    dma_handler->post_only_cq(qp->send_cq);
+    dma_handler->post_send_recv_cqe(qp->send_cq);
     // don't forget to step send_wq !!!
     // 
     qp->send_cq->step_cq();
 }
 
 void datapath_handler::dma_recv_cq_to_host(dpu_qp *qp) {
-    dma_handler->post_only_cq(qp->recv_cq);
+    dma_handler->post_send_recv_cqe(qp->recv_cq);
     qp->recv_wq->step_wq();
     qp->recv_cq->step_cq();
 }
