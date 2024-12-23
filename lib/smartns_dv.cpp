@@ -79,12 +79,18 @@ struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
 
         send_wq->own_flag = 1;
 
-        send_wq->dma_wq.dma_send_cq = create_dma_cq(context, 128);
-        send_wq->dma_wq.dma_recv_cq = send_wq->dma_wq.dma_send_cq;
+        send_wq->dma_wq.dma_send_recv_cq = create_dma_cq(context, 256);
         send_wq->dma_wq.start_index = 0;
+        send_wq->dma_wq.dma_index = 0;
         send_wq->dma_wq.finish_index = 0;
-        send_wq->dma_wq.max_num = 128;
-        send_wq->dma_wq.dma_qp = create_dma_qp(context, pd, send_wq->dma_wq.dma_recv_cq, send_wq->dma_wq.dma_send_cq, 128);
+        send_wq->dma_wq.max_num = 256;
+        send_wq->dma_wq.dma_batch_size = 1;
+        send_wq->dma_wq.host_addr = send_wq->host_send_wq_buf;
+        send_wq->dma_wq.bf_addr = send_wq->bf_send_wq_buf;
+        send_wq->dma_wq.wqe_size = sizeof(smartns_send_wqe);
+        send_wq->dma_wq.wqe_cnt = params.send_wq_capacity;
+
+        send_wq->dma_wq.dma_qp = create_dma_qp(context, pd, send_wq->dma_wq.dma_send_recv_cq, send_wq->dma_wq.dma_send_recv_cq, 256);
         init_dma_qp(send_wq->dma_wq.dma_qp);
         dma_qp_self_connected(send_wq->dma_wq.dma_qp);
 
@@ -128,8 +134,7 @@ int smartns_close_device(struct ibv_context *context) {
     for (auto &send_wq : s_ctx->send_wq_list) {
         free(send_wq->wrid);
         ibv_destroy_qp(send_wq->dma_wq.dma_qp);
-        // don't need destory recv_cq because it's equal to send_cq
-        ibv_destroy_cq(send_wq->dma_wq.dma_send_cq);
+        ibv_destroy_cq(send_wq->dma_wq.dma_send_recv_cq);
         delete send_wq;
     }
 
@@ -296,6 +301,8 @@ struct ibv_cq *smartns_create_cq(struct ibv_context *context, int cqe, void *cq_
     assert(host_cq_doorbell != nullptr);
     assert(bf_cq_buf != nullptr);
     assert(bf_cq_doorbell != nullptr);
+    assert(reinterpret_cast<size_t>(host_cq_buf) % PAGE_SIZE == 0);
+    assert(reinterpret_cast<size_t>(bf_cq_buf) % PAGE_SIZE == 0);
 
     struct SMARTNS_CREATE_CQ_PARAMS params;
     memset(&params, 0, sizeof(params));
@@ -407,6 +414,9 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
 
     void *host_recv_wq_addr = s_ctx->host_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
     void *bf_recv_wq_addr = s_ctx->bf_mr_allocator->alloc(recv_wq_size, PAGE_SIZE);
+    assert(reinterpret_cast<size_t>(host_recv_wq_addr) % PAGE_SIZE == 0);
+    assert(reinterpret_cast<size_t>(bf_recv_wq_addr) % PAGE_SIZE == 0);
+
 
     struct SMARTNS_CREATE_QP_PARAMS params;
     memset(&params, 0, sizeof(params));
@@ -470,13 +480,19 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     s_qp->recv_wq->own_flag = 1;
     s_qp->recv_wq->wrid = reinterpret_cast<uint64_t *>(malloc(sizeof(uint64_t) * s_qp->recv_wq->wqe_cnt));
 
-    s_qp->recv_wq->dma_wq.dma_send_cq = create_dma_cq(s_ctx->context, 128);
-    s_qp->recv_wq->dma_wq.dma_recv_cq = s_qp->recv_wq->dma_wq.dma_send_cq;
+    s_qp->recv_wq->dma_wq.dma_send_recv_cq = create_dma_cq(s_ctx->context, 256);
     s_qp->recv_wq->dma_wq.start_index = 0;
+    s_qp->recv_wq->dma_wq.dma_index = 0;
     s_qp->recv_wq->dma_wq.finish_index = 0;
-    s_qp->recv_wq->dma_wq.max_num = 128;
+    s_qp->recv_wq->dma_wq.max_num = 256;
+    // 16 * 4 = 64B
+    s_qp->recv_wq->dma_wq.dma_batch_size = 4;
+    s_qp->recv_wq->dma_wq.host_addr = s_qp->recv_wq->host_recv_wq_buf;
+    s_qp->recv_wq->dma_wq.bf_addr = s_qp->recv_wq->bf_recv_wq_buf;
+    s_qp->recv_wq->dma_wq.wqe_size = recv_wqe_size;
+    s_qp->recv_wq->dma_wq.wqe_cnt = recv_wqe_cnt;
 
-    s_qp->recv_wq->dma_wq.dma_qp = create_dma_qp(s_ctx->context, s_ctx->inner_pd, s_qp->recv_wq->dma_wq.dma_recv_cq, s_qp->recv_wq->dma_wq.dma_send_cq, 128);
+    s_qp->recv_wq->dma_wq.dma_qp = create_dma_qp(s_ctx->context, s_ctx->inner_pd, s_qp->recv_wq->dma_wq.dma_send_recv_cq, s_qp->recv_wq->dma_wq.dma_send_recv_cq, 256);
     init_dma_qp(s_qp->recv_wq->dma_wq.dma_qp);
     dma_qp_self_connected(s_qp->recv_wq->dma_wq.dma_qp);
 
@@ -523,7 +539,7 @@ int smartns_destroy_qp(struct ibv_qp *qp) {
     free(s_qp->recv_wq->wrid);
 
     ibv_destroy_qp(s_qp->recv_wq->dma_wq.dma_qp);
-    ibv_destroy_cq(s_qp->recv_wq->dma_wq.dma_send_cq);
+    ibv_destroy_cq(s_qp->recv_wq->dma_wq.dma_send_recv_cq);
     delete s_qp->recv_wq;
     delete s_qp;
 
@@ -537,11 +553,9 @@ int smartns_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send
     struct smartns_send_wqe *scat;
     int nreq;
     int ind;
-    int begin_indx;
 
     s_qp->send_wq->lock.lock();
     ind = s_qp->send_wq->head & (s_qp->send_wq->wqe_cnt - 1);
-    begin_indx = ind;
 
     for (nreq = 0;wr;++nreq, wr = wr->next) {
         if (unlikely(s_qp->send_wq->head - s_qp->send_wq->tail + nreq >= s_qp->send_wq->wqe_cnt)) {
@@ -574,21 +588,19 @@ int smartns_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send
         s_qp->send_wq->wrid[ind] = wr->wr_id;
 
         ind++;
+        s_qp->send_wq->dma_wq.step_dma_req(s_qp->send_wq->bf_mr_lkey, s_qp->send_wq->host_mr_lkey);
+
         if (static_cast<uint32_t>(ind) == s_qp->send_wq->wqe_cnt) {
-            s_qp->send_wq->dma_wq.post_dma_req(s_qp->send_wq->bf_mr_lkey, reinterpret_cast<uint64_t>(s_qp->send_wq->bf_send_wq_buf) + (begin_indx << s_qp->send_wq->wqe_shift),
-                s_qp->send_wq->host_mr_lkey, reinterpret_cast<uint64_t>(s_qp->send_wq->host_send_wq_buf) + (begin_indx << s_qp->send_wq->wqe_shift), (ind - begin_indx) * s_qp->send_wq->wqe_size);
+            s_qp->send_wq->dma_wq.flush_dma_req(s_qp->send_wq->bf_mr_lkey, s_qp->send_wq->host_mr_lkey);
             ind = 0;
-            begin_indx = 0;
             s_qp->send_wq->own_flag = s_qp->send_wq->own_flag ^ SMARTNS_SEND_WQE_OWNER_MASK;
         }
     }
     if (nreq) {
         s_qp->send_wq->head += nreq;
-        if (ind - begin_indx > 0) {
-            s_qp->send_wq->dma_wq.post_dma_req(s_qp->send_wq->bf_mr_lkey, reinterpret_cast<uint64_t>(s_qp->send_wq->bf_send_wq_buf) + (begin_indx << s_qp->send_wq->wqe_shift),
-                s_qp->send_wq->host_mr_lkey, reinterpret_cast<uint64_t>(s_qp->send_wq->host_send_wq_buf) + (begin_indx << s_qp->send_wq->wqe_shift), (ind - begin_indx) * s_qp->send_wq->wqe_size);
-        }
     }
+
+    s_qp->send_wq->dma_wq.poll_dma_cq();
 
     s_qp->send_wq->lock.unlock();
     return 0;
@@ -600,12 +612,10 @@ int smartns_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv
     struct smartns_recv_wqe *scat;
     int nreq;
     int ind;
-    int begin_indx;
     int i, j;
 
     s_qp->recv_wq->lock.lock();
     ind = s_qp->recv_wq->head & (s_qp->recv_wq->wqe_cnt - 1);
-    begin_indx = ind;
 
     for (nreq = 0;wr;++nreq, wr = wr->next) {
         if (unlikely(s_qp->recv_wq->head - s_qp->recv_wq->tail + nreq >= s_qp->recv_wq->wqe_cnt)) {
@@ -637,21 +647,18 @@ int smartns_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv
         s_qp->recv_wq->wrid[ind] = wr->wr_id;
 
         ind++;
+        s_qp->recv_wq->dma_wq.step_dma_req(s_qp->recv_wq->bf_mr_lkey, s_qp->recv_wq->host_mr_lkey);
         if (static_cast<uint32_t>(ind) == s_qp->recv_wq->wqe_cnt) {
-            s_qp->recv_wq->dma_wq.post_dma_req(s_qp->recv_wq->bf_mr_lkey, reinterpret_cast<uint64_t>(s_qp->recv_wq->bf_recv_wq_buf) + (begin_indx << s_qp->recv_wq->wqe_shift),
-                s_qp->recv_wq->host_mr_lkey, reinterpret_cast<uint64_t>(s_qp->recv_wq->host_recv_wq_buf) + (begin_indx << s_qp->recv_wq->wqe_shift), (ind - begin_indx) * s_qp->recv_wq->wqe_size);
+            s_qp->recv_wq->dma_wq.flush_dma_req(s_qp->recv_wq->bf_mr_lkey, s_qp->recv_wq->host_mr_lkey);
             ind = 0;
-            begin_indx = 0;
             s_qp->recv_wq->own_flag = s_qp->recv_wq->own_flag ^ SMARTNS_RECV_WQE_OWNER_MASK;
         }
     }
     if (nreq) {
         s_qp->recv_wq->head += nreq;
-        if (ind - begin_indx > 0) {
-            s_qp->recv_wq->dma_wq.post_dma_req(s_qp->recv_wq->bf_mr_lkey, reinterpret_cast<uint64_t>(s_qp->recv_wq->bf_recv_wq_buf) + (begin_indx << s_qp->recv_wq->wqe_shift),
-                s_qp->recv_wq->host_mr_lkey, reinterpret_cast<uint64_t>(s_qp->recv_wq->host_recv_wq_buf) + (begin_indx << s_qp->recv_wq->wqe_shift), (ind - begin_indx) * s_qp->recv_wq->wqe_size);
-        }
     }
+
+    s_qp->recv_wq->dma_wq.poll_dma_cq();
 
     s_qp->recv_wq->lock.unlock();
     return 0;
@@ -692,7 +699,13 @@ int smartns_poll_cq(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc) {
             wc->status = IBV_WC_SUCCESS;
             if (qp->send_wq->tail > cqe->wqe_counter) {
                 printf("Warning, send wq tail %u, cqe wqe counter %u\n", qp->send_wq->tail, cqe->wqe_counter);
-                // skip update tail
+
+                if (cqe->wqe_counter < qp->send_wq->wqe_cnt && qp->send_wq->tail >= UINT32_MAX - qp->send_wq->wqe_cnt) {
+                    qp->send_wq->tail = cqe->wqe_counter + 1;
+                } else {
+                    printf("Illegal send wq tail %u, cqe wqe counter %u\n", qp->send_wq->tail, cqe->wqe_counter);
+                    exit(1);
+                }
             } else {
                 qp->send_wq->tail = cqe->wqe_counter + 1;
             }

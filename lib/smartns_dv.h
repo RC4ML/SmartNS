@@ -22,30 +22,53 @@ static_assert(sizeof(smartns_cqe) == 64);
 static_assert(sizeof(smartns_cq_doorbell) == 64);
 
 struct smartns_dma_wq {
-    const size_t dma_batch_size = 8;
+    const size_t signal_batch_size = 16;
     struct ibv_qp *dma_qp;
     struct ibv_qp_ex *dma_qpx;
     struct mlx5dv_qp_ex *dma_mqpx;
-    uint32_t start_index;
-    uint32_t finish_index;
-    uint32_t max_num;
+    uint64_t start_index;
+    uint64_t dma_index;
+    uint64_t finish_index;
+    uint64_t max_num;
+    size_t dma_batch_size = 1;
+
+    void *host_addr;
+    void *bf_addr;
+    uint32_t wqe_size;
+    uint32_t wqe_cnt;
+
     ibv_wc wc[16];
-    ibv_cq *dma_send_cq;
-    ibv_cq *dma_recv_cq;
+    ibv_cq *dma_send_recv_cq;
 
-    inline void post_dma_req(uint32_t dest_lkey, uint64_t dest_addr,
-        uint32_t src_lkey, uint64_t src_addr, size_t length) {
-        assert(start_index - finish_index < max_num);
-        dma_qpx->wr_id = start_index;
-        dma_qpx->wr_flags = (start_index % dma_batch_size) == (dma_batch_size - 1) ? IBV_SEND_SIGNALED : 0;
-        dma_mqpx->wr_memcpy_direct(dma_mqpx, dest_lkey, dest_addr, src_lkey, src_addr, length);
+    inline void step_dma_req(uint32_t bf_lkey, uint32_t host_lkey) {
         start_index++;
+        assert(start_index - finish_index <= max_num);
+        if (start_index >= dma_index + dma_batch_size) {
+            uint32_t offset = (dma_index & (wqe_cnt - 1)) * wqe_size;
+            dma_qpx->wr_id = start_index;
+            dma_qpx->wr_flags = (start_index % signal_batch_size) == 0 ? IBV_SEND_SIGNALED : 0;
+            dma_mqpx->wr_memcpy_direct(dma_mqpx, bf_lkey, reinterpret_cast<uint64_t>(bf_addr) + offset, host_lkey, reinterpret_cast<uint64_t>(host_addr) + offset, (start_index - dma_index) * wqe_size);
+            dma_index = start_index;
+        }
+    }
 
-        uint32_t num_wc = ibv_poll_cq(dma_send_cq, 16, wc);
+    inline void flush_dma_req(uint32_t bf_lkey, uint32_t host_lkey) {
+        if (start_index > dma_index) {
+            uint32_t offset = (dma_index & (wqe_cnt - 1)) * wqe_size;
+            dma_qpx->wr_id = start_index;
+            dma_qpx->wr_flags = (start_index % signal_batch_size) == 0 ? IBV_SEND_SIGNALED : 0;
+            dma_mqpx->wr_memcpy_direct(dma_mqpx, bf_lkey, reinterpret_cast<uint64_t>(bf_addr) + offset, host_lkey, reinterpret_cast<uint64_t>(host_addr) + offset, (start_index - dma_index) * wqe_size);
+            dma_index = start_index;
+        }
+    }
+
+    inline void poll_dma_cq() {
+        uint32_t num_wc = ibv_poll_cq(dma_send_recv_cq, 16, wc);
         for (uint32_t i = 0; i < num_wc; i++) {
             assert(wc[i].status == IBV_WC_SUCCESS);
-            finish_index += dma_batch_size;
+            finish_index = wc[i].wr_id;
         }
+
     }
 };
 
