@@ -60,7 +60,7 @@ void init_req_packet(datapath_handler *handler, dpu_qp *qp, dpu_send_wqe *wqe, i
     }
 
     if (mask & RXE_WRITE_OR_SEND) {
-        handler->txpath_handler->commit_pkt_with_payload(wqe->remote_addr + wqe->cur_pkt_offset, wqe->remote_rkey, header_size, payload);
+        handler->txpath_handler->commit_pkt_with_payload(wqe->local_addr + wqe->cur_pkt_offset, wqe->local_lkey, header_size, payload);
     } else {
         handler->txpath_handler->commit_pkt_without_payload(header_size);
     }
