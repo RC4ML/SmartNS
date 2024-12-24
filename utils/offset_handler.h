@@ -4,9 +4,9 @@
 
 class offset_handler {
 private:
-    int max_num;
-    int step_size;
-    int buf_offset;
+    size_t max_num;
+    size_t step_size;
+    size_t buf_offset;
     size_t cur;
 
 public:
@@ -39,7 +39,7 @@ public:
     size_t index() {
         return cur;
     }
-    int index_mod() {
+    size_t index_mod() {
         return cur % max_num;
     }
 };
