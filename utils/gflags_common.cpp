@@ -80,7 +80,7 @@ static bool ValidateIp(const char *flag_name, const std::string &value) {
     if (value.empty()) {
         return true;
     }
-    const std::regex re(R"(^(\d{1,3}\.){3}\d{1,3}:\d+$)");
+    const std::regex re(R"(^(\d{1,3}\.){3}\d{1,3}$)");
 
     if (!std::regex_match(value, re)) {
         return false;
