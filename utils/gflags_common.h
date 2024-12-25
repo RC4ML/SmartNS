@@ -8,6 +8,8 @@ DECLARE_uint64(gidIndex);
 
 DECLARE_uint64(batch_size);
 
+DECLARE_uint64(threads);
+
 DECLARE_uint64(qp_per_core);
 
 DECLARE_uint64(outstanding);

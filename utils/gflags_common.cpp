@@ -7,6 +7,8 @@ DEFINE_uint64(gidIndex, 3, "gidIndex");
 
 DEFINE_uint64(batch_size, 1, "requeset batch_size");
 
+DEFINE_uint64(threads, 1, "exec threads");
+
 DEFINE_uint64(qp_per_core, 1, "qp per core");
 
 DEFINE_uint64(outstanding, 32, "outstanding request");
