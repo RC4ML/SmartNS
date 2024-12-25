@@ -175,7 +175,11 @@ struct SMARTNS_CREATE_QP_PARAMS {
 };
 
 struct SMARTNS_MODIFY_QP_PARAMS {
-
+    struct SMARTNS_KERNEL_COMMON_PARAMS common_params;
+    unsigned long int context_number;
+    unsigned long int pd_number;
+    unsigned long int qp_number;
+    unsigned int remote_qp_number;
 };
 
 struct SMARTNS_DESTROY_QP_PARAMS {
