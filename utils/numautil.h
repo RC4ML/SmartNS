@@ -6,27 +6,25 @@
 #include <sys/shm.h>
 #include <numa.h>
 
-namespace SmartNS {
 
-    /// Return the number of logical cores per NUMA node
-    size_t num_lcores_per_numa_node();
+/// Return the number of logical cores per NUMA node
+size_t num_lcores_per_numa_node();
 
-    /// Return a list of logical cores in \p numa_node
-    std::vector<int> get_lcores_for_numa_node(size_t numa_node);
+/// Return a list of logical cores in \p numa_node
+std::vector<int> get_lcores_for_numa_node(size_t numa_node);
 
-    /// Bind this thread to the core with index numa_local_index on the socket =
-    /// numa_node
-    void bind_to_core(std::thread &thread, size_t numa_node,
-        size_t numa_local_index);
+/// Bind this thread to the core with index numa_local_index on the socket =
+/// numa_node
+void bind_to_core(std::thread &thread, size_t numa_node,
+    size_t numa_local_index);
 
-    /// Wait until the thread is scheduled on the core with index numa_local_index
-    void wait_scheduling(size_t numa_node, size_t numa_local_index);
+/// Wait until the thread is scheduled on the core with index numa_local_index
+void wait_scheduling(size_t numa_node, size_t numa_local_index);
 
-    int get_2M_huagepages_free(size_t numa_node);
+int get_2M_huagepages_free(size_t numa_node);
 
-    int get_2M_huagepages_nr(size_t numa_node);
+int get_2M_huagepages_nr(size_t numa_node);
 
-    void *get_huge_mem(uint32_t numa_node, size_t size);
+void *get_huge_mem(uint32_t numa_node, size_t size);
 
-    void free_huge_mem(void *addr);
-}
+void free_huge_mem(void *addr);

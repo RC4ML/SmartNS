@@ -306,7 +306,7 @@ buddy_list_bucket *buddy_list_bucket::create_buddy_table(size_t numa_node, unsig
 
     // Allocate the memory
     size = 1 << power_of_two;
-    bsystem->buddy_base_address = SmartNS::get_huge_mem(numa_node, size);
+    bsystem->buddy_base_address = get_huge_mem(numa_node, size);
     if (bsystem->buddy_base_address == NULL) {
         free(bsystem);
         return NULL;
@@ -325,7 +325,7 @@ buddy_list_bucket *buddy_list_bucket::create_buddy_table(size_t numa_node, unsig
 
 buddy_list_bucket::~buddy_list_bucket() {
     if (buddy_base_address) {
-        SmartNS::free_huge_mem(buddy_base_address);
+        free_huge_mem(buddy_base_address);
     }
     free(this);
 }

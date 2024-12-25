@@ -6,7 +6,7 @@
 void ctrl_c_handler(int) { stop_flag = true; }
 
 void client_datapath(datapath_handler *handler) {
-    SmartNS::wait_scheduling(FLAGS_numaNode, handler->cpu_id);
+    wait_scheduling(FLAGS_numaNode, handler->cpu_id);
     if (handler->thread_id != 0) {
         return;
     }
@@ -37,7 +37,7 @@ void client_datapath(datapath_handler *handler) {
 }
 
 void server_datapath(datapath_handler *handler) {
-    SmartNS::wait_scheduling(FLAGS_numaNode, handler->cpu_id);
+    wait_scheduling(FLAGS_numaNode, handler->cpu_id);
 
     struct ibv_wc *wc_recv = NULL;
     ALLOCATE(wc_recv, struct ibv_wc, CTX_POLL_BATCH);
@@ -57,7 +57,7 @@ int main(int argc, char *argv[]) {
 
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    assert(SMARTNS_TX_RX_CORE + SMARTNS_CONTROL_CORE <= SmartNS::num_lcores_per_numa_node());
+    assert(SMARTNS_TX_RX_CORE + SMARTNS_CONTROL_CORE <= num_lcores_per_numa_node());
 
     datapath_manager *data_manager = new datapath_manager(FLAGS_deviceName, FLAGS_numaNode, FLAGS_is_server);
 
@@ -73,7 +73,7 @@ int main(int argc, char *argv[]) {
         } else {
             threads.emplace_back(std::thread(client_datapath, &data_manager->datapath_handler_list[i]));
         }
-        SmartNS::bind_to_core(threads[i], FLAGS_numaNode, i);
+        bind_to_core(threads[i], FLAGS_numaNode, i);
     }
 
     for (size_t i = 0;i < num_threads;i++) {

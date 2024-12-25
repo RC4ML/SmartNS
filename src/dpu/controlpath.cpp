@@ -13,7 +13,7 @@ controlpath_manager::controlpath_manager(std::string device_name, size_t numa_no
     roce_init(control_rdma_param, 1);
 
     send_recv_buf_size = (control_tx_depth + control_rx_depth) * control_packet_size;
-    send_recv_buf = SmartNS::get_huge_mem(numa_node, send_recv_buf_size);
+    send_recv_buf = get_huge_mem(numa_node, send_recv_buf_size);
     for (size_t j = 0;j < send_recv_buf_size / sizeof(size_t);j++) {
         ((size_t *)send_recv_buf)[j] = 0;
     }
@@ -52,7 +52,7 @@ controlpath_manager::~controlpath_manager() {
 
     ibv_close_device(control_rdma_param.contexts[0]);
 
-    SmartNS::free_huge_mem(send_recv_buf);
+    free_huge_mem(send_recv_buf);
     free(control_qp_handler);
 }
 

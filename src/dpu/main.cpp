@@ -8,7 +8,7 @@ std::atomic<bool> stop_flag = false;
 void ctrl_c_handler(int) { stop_flag = true; }
 
 void server_datapath(datapath_handler *handler) {
-    SmartNS::wait_scheduling(FLAGS_numaNode, handler->cpu_id);
+    wait_scheduling(FLAGS_numaNode, handler->cpu_id);
 
     while (!stop_flag) {
         handler->loop_datapath_send_wq();
@@ -19,7 +19,7 @@ void server_datapath(datapath_handler *handler) {
 }
 
 void host_controlpath(controlpath_manager *control_manager) {
-    SmartNS::wait_scheduling(FLAGS_numaNode, control_manager->cpu_id);
+    wait_scheduling(FLAGS_numaNode, control_manager->cpu_id);
 
     socket_init(control_manager->control_net_param);
     exchange_data(control_manager->control_net_param, reinterpret_cast<char *>(&control_manager->local_bf_info), reinterpret_cast<char *>(&control_manager->remote_host_info), sizeof(pingpong_info));
@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
 
     gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    assert(SMARTNS_TX_RX_CORE + SMARTNS_CONTROL_CORE <= SmartNS::num_lcores_per_numa_node());
+    assert(SMARTNS_TX_RX_CORE + SMARTNS_CONTROL_CORE <= num_lcores_per_numa_node());
 
     assert(setenv("MLX5_TOTAL_UUARS", "129", 0) == 0);
     assert(setenv("MLX5_NUM_LOW_LAT_UUARS", "128", 0) == 0);
@@ -140,13 +140,13 @@ int main(int argc, char *argv[]) {
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
         data_manager->datapath_handler_list[i].cpu_id = now_cpu_id;
         threads.emplace_back(std::thread(server_datapath, &data_manager->datapath_handler_list[i]));
-        SmartNS::bind_to_core(threads[i], FLAGS_numaNode, now_cpu_id);
+        bind_to_core(threads[i], FLAGS_numaNode, now_cpu_id);
         now_cpu_id++;
     }
 
     control_manager->cpu_id = now_cpu_id;
     threads.emplace_back(std::thread(host_controlpath, control_manager));
-    SmartNS::bind_to_core(threads[SMARTNS_TX_RX_CORE], FLAGS_numaNode, now_cpu_id);
+    bind_to_core(threads[SMARTNS_TX_RX_CORE], FLAGS_numaNode, now_cpu_id);
 
     now_cpu_id++;
 

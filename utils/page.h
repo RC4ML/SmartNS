@@ -1,6 +1,5 @@
 #pragma once
 
-namespace SmartNS {
 #define PAGE_SHIFT 12
 
 #define PAGE_SIZE (1UL << PAGE_SHIFT)
@@ -18,5 +17,3 @@ namespace SmartNS {
 #define PHYS_2_PFN(x) (static_cast<unsigned long>(x) >> PAGE_SHIFT)
 
 #define IS_PAGE_ALIGN(x) ((static_cast<unsigned long>(x) & (PAGE_SIZE - 1)) == 0)
-
-}

@@ -27,67 +27,66 @@
 #define SMARTNS_LOG_LEVEL SMARTNS_LOG_LEVEL_CC
 #endif
 
-namespace SmartNS {
     /// Return decent-precision time formatted as seconds:microseconds
-    static std::string get_formatted_time() {
-        const auto now = std::chrono::high_resolution_clock::now();
+static std::string get_formatted_time() {
+    const auto now = std::chrono::high_resolution_clock::now();
 
-        const size_t sec = static_cast<size_t>(
-            std::chrono::time_point_cast<std::chrono::seconds>(now)
-            .time_since_epoch()
-            .count());
+    const size_t sec = static_cast<size_t>(
+        std::chrono::time_point_cast<std::chrono::seconds>(now)
+        .time_since_epoch()
+        .count());
 
-        const size_t usec = static_cast<size_t>(
-            std::chrono::time_point_cast<std::chrono::microseconds>(now)
-            .time_since_epoch()
-            .count());
+    const size_t usec = static_cast<size_t>(
+        std::chrono::time_point_cast<std::chrono::microseconds>(now)
+        .time_since_epoch()
+        .count());
 
-        // Roll-over seconds every 100 seconds
-        char buf[20];
-        sprintf(buf, "%zu:%06zu", sec % 100,
-            (usec - (sec * 1000000)) /* spare microseconds */);
-        return std::string(buf);
-    }
-    // Output log message header
-    static void output_log_header(FILE *stream, int level) {
-        std::string formatted_time = get_formatted_time();
+    // Roll-over seconds every 100 seconds
+    char buf[20];
+    sprintf(buf, "%zu:%06zu", sec % 100,
+        (usec - (sec * 1000000)) /* spare microseconds */);
+    return std::string(buf);
+}
+// Output log message header
+static void output_log_header(FILE *stream, int level) {
+    std::string formatted_time = get_formatted_time();
 
-        const char *type;
-        switch (level) {
-        case SMARTNS_LOG_LEVEL_ERROR:
-            type = "ERROR";
-            break;
-        case SMARTNS_LOG_LEVEL_WARN:
-            type = "WARNG";
-            break;
-        case SMARTNS_LOG_LEVEL_INFO:
-            type = "INFOR";
-            break;
-        case SMARTNS_LOG_LEVEL_REORDER:
-            type = "REORD";
-            break;
-        case SMARTNS_LOG_LEVEL_TRACE:
-            type = "TRACE";
-            break;
-        case SMARTNS_LOG_LEVEL_CC:
-            type = "CONGC";
-            break;
-        default:
-            type = "UNKWN";
-        }
-
-        fprintf(stream, "%s %s: ", formatted_time.c_str(), type);
+    const char *type;
+    switch (level) {
+    case SMARTNS_LOG_LEVEL_ERROR:
+        type = "ERROR";
+        break;
+    case SMARTNS_LOG_LEVEL_WARN:
+        type = "WARNG";
+        break;
+    case SMARTNS_LOG_LEVEL_INFO:
+        type = "INFOR";
+        break;
+    case SMARTNS_LOG_LEVEL_REORDER:
+        type = "REORD";
+        break;
+    case SMARTNS_LOG_LEVEL_TRACE:
+        type = "TRACE";
+        break;
+    case SMARTNS_LOG_LEVEL_CC:
+        type = "CONGC";
+        break;
+    default:
+        type = "UNKWN";
     }
 
-    /// Return true iff REORDER/TRACE/CC mode logging is disabled. These modes can
-    /// print an unreasonable number of log messages.
-    static bool is_log_level_reasonable() {
-        return SMARTNS_LOG_LEVEL <= SMARTNS_LOG_LEVEL_INFO;
-    }
+    fprintf(stream, "%s %s: ", formatted_time.c_str(), type);
+}
+
+/// Return true iff REORDER/TRACE/CC mode logging is disabled. These modes can
+/// print an unreasonable number of log messages.
+static bool is_log_level_reasonable() {
+    return SMARTNS_LOG_LEVEL <= SMARTNS_LOG_LEVEL_INFO;
+}
 
 #if SMARTNS_LOG_LEVEL >= SMARTNS_LOG_LEVEL_ERROR
 #define SMARTNS_ERROR(...)                                    \
-    SmartNS::output_log_header(stderr, SMARTNS_LOG_LEVEL_ERROR); \
+    output_log_header(stderr, SMARTNS_LOG_LEVEL_ERROR); \
     fprintf(stderr, __VA_ARGS__);         \
     fprintf(stderr, "\n");                \
     fflush(stderr)
@@ -97,7 +96,7 @@ namespace SmartNS {
 
 #if SMARTNS_LOG_LEVEL >= SMARTNS_LOG_LEVEL_WARN
 #define SMARTNS_WARN(...)                                                     \
-    SmartNS::output_log_header(SMARTNS_LOG_DEFAULT_STREAM, SMARTNS_LOG_LEVEL_WARN); \
+    output_log_header(SMARTNS_LOG_DEFAULT_STREAM, SMARTNS_LOG_LEVEL_WARN); \
     fprintf(SMARTNS_LOG_DEFAULT_STREAM, __VA_ARGS__);                         \
     fprintf(SMARTNS_LOG_DEFAULT_STREAM, "\n");                                \
     fflush(SMARTNS_LOG_DEFAULT_STREAM)
@@ -107,7 +106,7 @@ namespace SmartNS {
 
 #if SMARTNS_LOG_LEVEL >= SMARTNS_LOG_LEVEL_INFO
 #define SMARTNS_INFO(...)                                                     \
-    SmartNS::output_log_header(SMARTNS_LOG_DEFAULT_STREAM, SMARTNS_LOG_LEVEL_INFO); \
+    output_log_header(SMARTNS_LOG_DEFAULT_STREAM, SMARTNS_LOG_LEVEL_INFO); \
     fprintf(SMARTNS_LOG_DEFAULT_STREAM, __VA_ARGS__);                         \
     fprintf(SMARTNS_LOG_DEFAULT_STREAM, "\n");                                \
     fflush(SMARTNS_LOG_DEFAULT_STREAM)
@@ -117,7 +116,7 @@ namespace SmartNS {
 
 #if SMARTNS_LOG_LEVEL >= SMARTNS_LOG_LEVEL_REORDER
 #define SMARTNS_REORDER(...)                                      \
-    SmartNS::output_log_header(smartns_trace_file_or_default_stream, \
+    output_log_header(smartns_trace_file_or_default_stream, \
                             SMARTNS_LOG_LEVEL_REORDER);           \
     fprintf(smartns_trace_file_or_default_stream, __VA_ARGS__);   \
     fprintf(smartns_trace_file_or_default_stream, "\n");          \
@@ -128,7 +127,7 @@ namespace SmartNS {
 
 #if SMARTNS_LOG_LEVEL >= SMARTNS_LOG_LEVEL_TRACE
 #define SMARTNS_TRACE(...)                                        \
-    SmartNS::output_log_header(smartns_trace_file_or_default_stream, \
+    output_log_header(smartns_trace_file_or_default_stream, \
                             SMARTNS_LOG_LEVEL_TRACE);             \
     fprintf(smartns_trace_file_or_default_stream, __VA_ARGS__);   \
     fprintf(smartns_trace_file_or_default_stream, "\n");          \
@@ -139,7 +138,7 @@ namespace SmartNS {
 
 #if SMARTNS_LOG_LEVEL >= SMARTNS_LOG_LEVEL_CC
 #define SMARTNS_CC(...)                                           \
-    SmartNS::output_log_header(smartns_trace_file_or_default_stream, \
+    output_log_header(smartns_trace_file_or_default_stream, \
                             SMARTNS_LOG_LEVEL_CC);                \
     fprintf(smartns_trace_file_or_default_stream, __VA_ARGS__);   \
     fprintf(smartns_trace_file_or_default_stream, "\n");          \
@@ -147,5 +146,3 @@ namespace SmartNS {
 #else
 #define SMARTNS_CC(...) ((void)0)
 #endif
-
-} // namespace SmartNS
