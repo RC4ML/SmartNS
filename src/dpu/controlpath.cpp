@@ -433,7 +433,28 @@ void controlpath_manager::handle_destory_qp(SMARTNS_DESTROY_QP_PARAMS *param) {
 
 
 void controlpath_manager::handle_modify_qp(SMARTNS_MODIFY_QP_PARAMS *param) {
+    struct dpu_context *dpu_ctx = context_list[param->context_number];
+    if (!dpu_ctx) {
+        SMARTNS_ERROR("context number %lu not found", param->context_number);
+        exit(1);
+    }
 
+    struct dpu_pd *pd = dpu_ctx->pd_list[param->pd_number];
+    if (!pd) {
+        SMARTNS_ERROR("context number %lu pd number %lu not found", param->context_number, param->pd_number);
+        exit(1);
+    }
+
+    struct dpu_qp *qp = dpu_ctx->qp_list[param->qp_number];
+    if (!qp) {
+        SMARTNS_ERROR("context number %lu qp number %lu not found", param->context_number, param->qp_number);
+        exit(1);
+    }
+
+    qp->remote_qp_number = param->remote_qp_number;
+
+    param->common_params.success = 1;
+    return;
 }
 
 size_t controlpath_manager::generate_context_number() {

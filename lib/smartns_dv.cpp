@@ -187,6 +187,10 @@ int smartns_dealloc_pd(struct ibv_pd *pd) {
     struct smartns_pd *s_pd = reinterpret_cast<smartns_pd *>(pd);
     struct smartns_context *s_ctx = s_pd->context;
 
+    if (s_ctx->pd_list.count(s_pd->pd_number) == 0) {
+        // just return 0
+        return 0;
+    }
     struct SMARTNS_DEALLOC_PD_PARAMS params;
     memset(&params, 0, sizeof(params));
     params.context_number = s_ctx->context_number;
@@ -508,6 +512,29 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
 // TODO 
 int smartns_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask) {
     struct smartns_qp *s_qp = reinterpret_cast<smartns_qp *>(qp);
+    struct smartns_context *s_ctx = s_qp->context;
+
+    struct SMARTNS_MODIFY_QP_PARAMS params;
+    memset(&params, 0, sizeof(params));
+
+    params.context_number = s_ctx->context_number;
+    params.pd_number = reinterpret_cast<smartns_pd *>(s_qp->pd)->pd_number;
+    params.qp_number = s_qp->qp_number;
+    params.remote_qp_number = attr->dest_qp_num;
+
+    int retcode = ioctl(s_ctx->kernel_fd, SMARTNS_IOC_MODIFY_QP, &params);
+    if (retcode < 0) {
+        fprintf(stderr, "Error, failed to ioctl SMARTNS_IOC_MODIFY_QP %d\n", retcode);
+        return -1;
+    }
+
+    if (params.common_params.success == 0) {
+        fprintf(stderr, "Error, failed to exec ioctl SMARTNS_IOC_MODIFY_QP\n");
+        return -1;
+    }
+
+    s_qp->remote_qp_number = attr->dest_qp_num;
+    s_qp->cur_qp_state = IBV_QPS_RTS;
     return 0;
 }
 
