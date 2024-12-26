@@ -43,13 +43,13 @@ struct smartns_dma_wq {
     inline void step_dma_req(uint32_t bf_lkey, uint32_t host_lkey) {
         start_index++;
         assert(start_index - finish_index <= max_num);
-        if (start_index >= dma_index + dma_batch_size) {
-            uint32_t offset = (dma_index & (wqe_cnt - 1)) * wqe_size;
-            dma_qpx->wr_id = start_index;
-            dma_qpx->wr_flags = (start_index % signal_batch_size) == 0 ? IBV_SEND_SIGNALED : 0;
-            dma_mqpx->wr_memcpy_direct(dma_mqpx, bf_lkey, reinterpret_cast<uint64_t>(bf_addr) + offset, host_lkey, reinterpret_cast<uint64_t>(host_addr) + offset, (start_index - dma_index) * wqe_size);
-            dma_index = start_index;
-        }
+        // if (start_index >= dma_index + dma_batch_size) {
+        //     uint32_t offset = (dma_index & (wqe_cnt - 1)) * wqe_size;
+        //     dma_qpx->wr_id = start_index;
+        //     dma_qpx->wr_flags = (start_index % signal_batch_size) == 0 ? IBV_SEND_SIGNALED : 0;
+        //     dma_mqpx->wr_memcpy_direct(dma_mqpx, bf_lkey, reinterpret_cast<uint64_t>(bf_addr) + offset, host_lkey, reinterpret_cast<uint64_t>(host_addr) + offset, (start_index - dma_index) * wqe_size);
+        //     dma_index = start_index;
+        // }
     }
 
     inline void flush_dma_req(uint32_t bf_lkey, uint32_t host_lkey) {

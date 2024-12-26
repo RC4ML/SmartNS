@@ -125,7 +125,7 @@ int main(int argc, char *argv[]) {
 
     controlpath_manager *control_manager = new controlpath_manager(FLAGS_deviceName, FLAGS_numaNode, FLAGS_is_server);
 
-    datapath_manager *data_manager = new datapath_manager(control_manager->control_rdma_param.contexts[0], control_manager->control_qp_handler->pd, FLAGS_numaNode, FLAGS_is_server);
+    datapath_manager *data_manager = new datapath_manager(control_manager->global_context, control_manager->global_pd, FLAGS_numaNode, FLAGS_is_server);
 
     // add datamanager to control manager for qp initial
     control_manager->data_manager = data_manager;

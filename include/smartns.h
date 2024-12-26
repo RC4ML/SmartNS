@@ -521,7 +521,7 @@ public:
     phmap::flat_hash_map<uint64_t, dpu_qp *>remote_qpn_to_qp_list;
 
     phmap::flat_hash_set<dpu_qp *>active_qp_list;
-    phmap::flat_hash_set<dpu_datapath_send_wq *>active_datapath_send_wq_list;
+    phmap::parallel_flat_hash_set<dpu_datapath_send_wq *>active_datapath_send_wq_list;
 
     void loop_datapath_send_wq();
 

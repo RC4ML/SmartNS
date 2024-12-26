@@ -75,7 +75,7 @@ include_directories(${CMAKE_SOURCE_DIR}/utils)
 include_directories(${CMAKE_SOURCE_DIR}/lib)
 
 #sub-project: HdrHistogram
-include_directories(${CMAKE_SOURCE_DIR}/HdrHistogram_c/include)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/HdrHistogram_c/include)
 
 # Common sub-projects: atomic_queue
 include_directories(${CMAKE_SOURCE_DIR}/third_party/atomic_queue/include)

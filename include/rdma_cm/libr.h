@@ -5,8 +5,8 @@
 #include "offset_handler.h"
 #include "config.h"
 
-#define RDMA_TX_DEPTH (128)
-#define RDMA_RX_DEPTH (128)
+#define RDMA_TX_DEPTH (256)
+#define RDMA_RX_DEPTH (256)
 #define RDMA_MAX_OUT_READ (1)
 #define RDMA_IB_PORT (1)
 #define RDMA_HOST_GID_INDEX (3)

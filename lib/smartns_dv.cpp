@@ -509,7 +509,6 @@ ibv_qp *smartns_create_qp(struct ibv_pd *pd, struct ibv_qp_init_attr *qp_init_at
     return reinterpret_cast<ibv_qp *>(s_qp);
 }
 
-// TODO 
 int smartns_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask) {
     struct smartns_qp *s_qp = reinterpret_cast<smartns_qp *>(qp);
     struct smartns_context *s_ctx = s_qp->context;
@@ -625,6 +624,7 @@ int smartns_post_send(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send
     }
     if (nreq) {
         s_qp->send_wq->head += nreq;
+        s_qp->send_wq->dma_wq.flush_dma_req(s_qp->send_wq->bf_mr_lkey, s_qp->send_wq->host_mr_lkey);
     }
 
     s_qp->send_wq->dma_wq.poll_dma_cq();
@@ -683,6 +683,7 @@ int smartns_post_recv(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv
     }
     if (nreq) {
         s_qp->recv_wq->head += nreq;
+        s_qp->recv_wq->dma_wq.flush_dma_req(s_qp->recv_wq->bf_mr_lkey, s_qp->recv_wq->host_mr_lkey);
     }
 
     s_qp->recv_wq->dma_wq.poll_dma_cq();
@@ -699,7 +700,7 @@ int smartns_poll_cq(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc) {
 
     s_cq->lock.lock();
 
-    for (npolled = 0; npolled < num_entries;npolled++) {
+    for (npolled = 0; npolled < num_entries;++npolled, ++wc) {
         struct smartns_cqe *cqe = reinterpret_cast<struct smartns_cqe *>(reinterpret_cast<uint8_t *>(s_cq->host_cq_buf) + (s_cq->head & (s_cq->wqe_cnt - 1)) * s_cq->wqe_size);
         if (cqe->op_own != s_cq->own_flag) {
             break;

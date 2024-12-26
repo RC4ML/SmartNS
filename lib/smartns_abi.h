@@ -35,9 +35,9 @@ struct __attribute__((packed)) smartns_send_wqe {
 
     uint32_t cur_pos;
     uint8_t is_signal;
-    uint8_t op_own;
 
     uint8_t reserved2[10];
+    uint8_t op_own;
 };
 
 struct __attribute__((packed)) smartns_recv_wqe {
@@ -53,8 +53,8 @@ struct __attribute__((packed)) smartns_cqe {
     uint32_t wqe_counter;
     uint16_t mlx5_opcode;
     uint8_t cq_opcode;
-    uint8_t op_own;
     uint8_t reserved[44];
+    uint8_t op_own;
 };
 
 struct __attribute__((packed)) smartns_cq_doorbell {
