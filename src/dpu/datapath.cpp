@@ -107,13 +107,13 @@ datapath_manager::datapath_manager(ibv_context *all_context, ibv_pd *all_pd, siz
     SMARTNS_INFO("%-20s : %d", "CUR MTU", 128 << (port_attr.active_mtu));
 
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
-        void *send_buf = SmartNS::get_huge_mem(numa_node, SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER);
+        void *send_buf = get_huge_mem(numa_node, SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER);
         for (size_t j = 0;j < SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER / sizeof(size_t);j++) {
             ((size_t *)send_buf)[j] = 0;
         }
         txpath_send_buf_list.push_back(send_buf);
 
-        void *recv_buf = SmartNS::get_huge_mem(numa_node, SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
+        void *recv_buf = get_huge_mem(numa_node, SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
         for (size_t j = 0;j < SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER / sizeof(size_t);j++) {
             ((size_t *)recv_buf)[j] = 0;
         }
@@ -163,8 +163,8 @@ datapath_manager::~datapath_manager() {
     ibv_destroy_rwq_ind_table(main_rwq_ind_table);
 
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
-        SmartNS::free_huge_mem(txpath_send_buf_list[i]);
-        SmartNS::free_huge_mem(rxpath_recv_buf_list[i]);
+        free_huge_mem(txpath_send_buf_list[i]);
+        free_huge_mem(rxpath_recv_buf_list[i]);
 
         delete datapath_handler_list[i].txpath_handler;
         delete datapath_handler_list[i].rxpath_handler;
@@ -202,6 +202,7 @@ txpath_handler::txpath_handler(ibv_context *context, ibv_pd *pd, void *buf_addr,
     tx_qp_init_attr.recv_cq = send_cq;
     tx_qp_init_attr.cap.max_send_wr = tx_depth;
     tx_qp_init_attr.cap.max_send_sge = num_sges_per_wr;
+    tx_qp_init_attr.cap.max_inline_data = 0;
     tx_qp_init_attr.qp_type = IBV_QPT_RAW_PACKET;
     assert(send_qp = ibv_create_qp(pd, &tx_qp_init_attr));
 
@@ -323,8 +324,8 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
     this->context = context;
     this->pd = pd;
 
-    assert(dma_send_recv_cq = create_dma_cq(context, 128 * SMARTNS_DMA_GROUP_SIZE));
-    assert(invalid_send_recv_cq = create_dma_cq(context, 128 * SMARTNS_DMA_GROUP_SIZE));
+    assert(dma_send_recv_cq = create_dma_cq(context, 256 * SMARTNS_DMA_GROUP_SIZE));
+    assert(invalid_send_recv_cq = create_dma_cq(context, 256 * SMARTNS_DMA_GROUP_SIZE));
 
     dma_qp_list = new ibv_qp * [SMARTNS_DMA_GROUP_SIZE];
     dma_qpx_list = new ibv_qp_ex * [SMARTNS_DMA_GROUP_SIZE];
@@ -343,7 +344,7 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
 
 
     for (size_t i = 0;i < SMARTNS_DMA_GROUP_SIZE;i++) {
-        ibv_qp *dma_qp = create_dma_qp(context, pd, dma_send_recv_cq, dma_send_recv_cq, 128);
+        ibv_qp *dma_qp = create_dma_qp(context, pd, dma_send_recv_cq, dma_send_recv_cq, 256);
         init_dma_qp(dma_qp);
         dma_qp_self_connected(dma_qp);
 
@@ -358,8 +359,16 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
         payload_count_list[i] = 0;
     }
 
+    cqe_qp = create_dma_qp(context, pd, invalid_send_recv_cq, invalid_send_recv_cq, 256);
+    init_dma_qp(cqe_qp);
+    dma_qp_self_connected(cqe_qp);
+    cqe_qpx = ibv_qp_to_qp_ex(cqe_qp);
+    cqe_mqpx = mlx5dv_qp_ex_from_ibv_qp_ex(cqe_qpx);
+    cqe_mqpx->wr_memcpy_direct_init(cqe_mqpx);
+    cqe_count = 0;
+
     for (size_t i = 0;i < SMARTNS_DMA_GROUP_SIZE;i++) {
-        ibv_qp *dma_qp = create_dma_qp(context, pd, invalid_send_recv_cq, invalid_send_recv_cq, 128);
+        ibv_qp *dma_qp = create_dma_qp(context, pd, invalid_send_recv_cq, invalid_send_recv_cq, 256);
         init_dma_qp(dma_qp);
         dma_qp_self_connected(dma_qp);
 
@@ -380,6 +389,8 @@ dma_handler::~dma_handler() {
         ibv_destroy_qp(dma_qp_list[i]);
         ibv_destroy_qp(invalid_qp_list[i]);
     }
+    ibv_destroy_qp(cqe_qp);
+
     ibv_destroy_cq(dma_send_recv_cq);
     ibv_destroy_cq(invalid_send_recv_cq);
 
