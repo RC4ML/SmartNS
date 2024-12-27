@@ -8,7 +8,7 @@
 #include "smartns_abi.h"
 #include "phmap.h"
 #include "devx/devx_mr.h"
-
+#include "raw_packet/raw_packet.h"
 
 extern std::atomic<bool> stop_flag;
 
@@ -164,7 +164,10 @@ struct alignas(64) dpu_recv_wq {
 
     inline smartns_recv_wqe *get_next_wqe() {
         smartns_recv_wqe *wqe = reinterpret_cast<smartns_recv_wqe *>(reinterpret_cast<uint8_t *>(bf_recv_wq_buf) + (head << wqe_shift));
-        assert(wqe->op_own == own_flag);
+        if (wqe->op_own != own_flag) {
+            SMARTNS_WARN("head %u, own_flag %u, but wqe_own %u not match\n", head, own_flag, wqe->op_own);
+            exit(1);
+        }
         SMARTNS_TRACE("recv wqe addr 0X%lx lkey %u byte count %u\n", wqe->addr, wqe->lkey, wqe->byte_count);
 
         return wqe;
@@ -287,6 +290,11 @@ public:
     //plus one when dma packet payload, and reset to 0 when set signal
     uint64_t *payload_count_list;
 
+    ibv_qp *cqe_qp;
+    ibv_qp_ex *cqe_qpx;
+    mlx5dv_qp_ex *cqe_mqpx;
+    uint32_t cqe_count;
+
     ibv_qp **invalid_qp_list;
     ibv_qp_ex **invalid_qpx_list;
     mlx5dv_qp_ex **invalid_mqpx_list;
@@ -298,7 +306,7 @@ public:
 
     // this cq will be shared within all DMA QP
     ibv_cq *dma_send_recv_cq;
-    // this cq will be shared within all cache invalid QP
+    // this cq will be shared within all cache invalid QP and cqe
     ibv_cq *invalid_send_recv_cq;
 
     inline void post_dma_req_without_cq(uint32_t dest_lkey, uint64_t dest_addr,
@@ -328,46 +336,36 @@ public:
     }
 
     inline void post_send_recv_cqe(dpu_cq *cq) {
-        bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH >= (SMARTNS_DMA_BATCH - 1);
+        bool is_signal = cqe_count % 16 == 15;
 
-        dma_count_list[now_use_qp_index]++;
-
-        dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
-        dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
+        cqe_qpx->wr_id = cqe_count;
+        cqe_qpx->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
         size_t cqe_offset = (cq->head & (cq->wqe_cnt - 1)) << cq->wqe_shift;
-        dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], cq->host_mkey, reinterpret_cast<uint64_t>(cq->host_cq_buf) + cqe_offset, cq->bf_mkey, reinterpret_cast<uint64_t>(cq->bf_cq_buf) + cqe_offset, cq->wqe_size);
-
-        if (is_signal) {
-            dma_count_list[now_use_qp_index] = 0;
-            payload_count_list[now_use_qp_index] = 0;
-            now_use_qp_index = (now_use_qp_index + 1) % qp_group_size;
-        }
+        cqe_mqpx->wr_memcpy_direct(cqe_mqpx, cq->host_mkey, reinterpret_cast<uint64_t>(cq->host_cq_buf) + cqe_offset, cq->bf_mkey, reinterpret_cast<uint64_t>(cq->bf_cq_buf) + cqe_offset, cq->wqe_size);
+        cqe_count++;
     }
 
     inline uint32_t poll_dma_cq() {
         uint32_t total_finish_dma = 0;
         ibv_wc wc[16];
-        for (uint32_t i = 0;i < qp_group_size;i++) {
-            uint32_t num_wc = ibv_poll_cq(dma_send_recv_cq, 16, wc);
-            for (uint32_t j = 0; j < num_wc; j++) {
-                if (wc[j].status != IBV_WC_SUCCESS) {
-                    SMARTNS_ERROR("dma cq error %d %ld\n", wc[j].status, wc[j].wr_id);
-                    exit(-1);
-                }
-                uint64_t wr_id = wc[j].wr_id;
-                uint32_t qp_index = wr_id & 0xFFFFFFFF;
-                uint32_t payload_count = wr_id >> 32;
-                invalid_mqpx_list[qp_index]->wr_invcache_direct_flush(invalid_mqpx_list[qp_index], invalid_finish_index_list[qp_index], payload_count);
-                invalid_finish_index_list[qp_index] += payload_count;
-                total_finish_dma += payload_count;
+
+        uint32_t num_wc = ibv_poll_cq(dma_send_recv_cq, 16, wc);
+        for (uint32_t i = 0; i < num_wc; i++) {
+            if (wc[i].status != IBV_WC_SUCCESS) {
+                SMARTNS_ERROR("dma cq error %d %ld\n", wc[i].status, wc[i].wr_id);
+                exit(-1);
             }
+            uint64_t wr_id = wc[i].wr_id;
+            uint32_t qp_index = wr_id & 0xFFFFFFFF;
+            uint32_t payload_count = wr_id >> 32;
+            invalid_mqpx_list[qp_index]->wr_invcache_direct_flush(invalid_mqpx_list[qp_index], invalid_finish_index_list[qp_index], payload_count);
+            invalid_finish_index_list[qp_index] += payload_count;
+            total_finish_dma += payload_count;
         }
 
-        for (uint32_t i = 0;i < qp_group_size;i++) {
-            uint32_t num_wc = ibv_poll_cq(invalid_send_recv_cq, 16, wc);
-            for (uint32_t j = 0; j < num_wc; j++) {
-                assert(wc[j].status == IBV_WC_SUCCESS);
-            }
+        num_wc = ibv_poll_cq(invalid_send_recv_cq, 16, wc);
+        for (uint32_t i = 0; i < num_wc; i++) {
+            assert(wc[i].status == IBV_WC_SUCCESS);
         }
 
         return total_finish_dma;
@@ -412,6 +410,10 @@ public:
     }
 
     inline void commit_pkt_with_payload(uint64_t remote_addr, uint32_t rkey, uint32_t header_size, uint32_t payload_size) {
+        udp_packet *packet = reinterpret_cast<udp_packet *>(send_offset_handler.offset() + send_buf_addr);
+        packet->ip_hdr.total_length = htons(header_size + payload_size - sizeof(ether_hdr));
+        packet->udp_hdr.dgram_len = htons(header_size + payload_size - sizeof(ether_hdr) - sizeof(ipv4_hdr));
+
         send_sge_list[wr_index * num_sges_per_wr].addr = send_offset_handler.offset() + send_buf_addr;
         send_sge_list[wr_index * num_sges_per_wr].length = header_size;
 
@@ -437,6 +439,10 @@ public:
     }
 
     inline void commit_pkt_without_payload(uint32_t header_size) {
+        udp_packet *packet = reinterpret_cast<udp_packet *>(send_offset_handler.offset() + send_buf_addr);
+        packet->ip_hdr.total_length = htons(header_size - sizeof(ether_hdr));
+        packet->udp_hdr.dgram_len = htons(header_size - sizeof(ether_hdr) - sizeof(ipv4_hdr));
+
         send_sge_list[wr_index * num_sges_per_wr].addr = send_offset_handler.offset() + send_buf_addr;
         send_sge_list[wr_index * num_sges_per_wr].length = header_size;
 
@@ -469,7 +475,7 @@ public:
         int recv = ibv_poll_cq(send_cq, 16, wc);
         for (int i = 0;i < recv;i++) {
             if (wc[i].status != IBV_WC_SUCCESS || wc[i].opcode != IBV_WC_SEND) {
-                SMARTNS_ERROR("tx cq error\n");
+                SMARTNS_ERROR("tx cq error status %d opcode %d\n", wc[i].status, wc[i].opcode);
                 exit(-1);
             }
             send_comp_offset_handler.step(SMARTNS_TX_BATCH);
@@ -518,7 +524,6 @@ public:
 
     // don't need use parallel hash map
     phmap::flat_hash_map<uint64_t, dpu_qp *>local_qpn_to_qp_list;
-    phmap::flat_hash_map<uint64_t, dpu_qp *>remote_qpn_to_qp_list;
 
     phmap::flat_hash_set<dpu_qp *>active_qp_list;
     phmap::parallel_flat_hash_set<dpu_datapath_send_wq *>active_datapath_send_wq_list;
