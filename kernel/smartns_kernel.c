@@ -210,6 +210,7 @@ static long smartns_ioctl(struct inode *inode, struct file *filep, unsigned int 
     smartns_info_t *info = filep->private_data;
     void __user *param = (void __user *)arg;
     struct SMARTNS_KERNEL_COMMON_PARAMS *common_params;
+    size_t begin_tsc, cur_tsc;
 
     if (_IOC_TYPE(cmd) != SMARTNS_IOCTL) {
         pr_err("%s: invalid ioctl type\n", MODULE_NAME);
@@ -260,7 +261,13 @@ static long smartns_ioctl(struct inode *inode, struct file *filep, unsigned int 
 
     offset_handler_step(&global_qp_handler.send_offset_handler);
 
+    begin_tsc = get_cycles();
     while (1) {
+        cur_tsc = get_cycles();
+        if (cur_tsc - begin_tsc > 2 * 1000000000) {
+            pr_err("%s: failed to recv data\n", MODULE_NAME);
+            return -EFAULT;
+        }
         ne = ib_poll_cq(global_qp_handler.recv_cq, SMARTNS_CQ_POLL_BATCH, global_qp_handler.recv_wc);
         if (ne > 0) {
             if (ne != 1) {
