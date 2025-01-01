@@ -44,9 +44,6 @@ void complete_send_wqe(datapath_handler *handler, dpu_qp *qp, dpu_send_wqe *wqe)
     }
 
     qp->send_wq->step_tail();
-    if (qp->send_wq->is_empty()) {
-        handler->active_qp_list.erase(qp);
-    }
 }
 
 int rxe_handle_recv(datapath_handler *handler) {
@@ -71,6 +68,7 @@ int rxe_handle_recv(datapath_handler *handler) {
             uint32_t payload_size = handler->wc_send_recv[i].byte_len - sizeof(udp_packet) - rxe_opcode[opcode].offset[RXE_PAYLOAD];
             int diff = psn_compare(psn, qp->recv_wq->psn);
             if (diff > 0) {
+                SMARTNS_INFO("thread[%ld] Recv out of order psn %u, want %u, send nak\n", handler->thread_id, psn, qp->recv_wq->psn);
                 if (qp->recv_wq->sent_psn_nak == 1) {
                     continue;
                 }
@@ -80,11 +78,12 @@ int rxe_handle_recv(datapath_handler *handler) {
             } else if (diff < 0) {
                 uint32_t prev_psn = (qp->recv_wq->ack_psn - 1) & BTH_PSN_MASK;
                 if (mask & RXE_SEND_MASK || mask & RXE_WRITE_MASK) {
+                    SMARTNS_INFO("Recv duplicate packet psn %u, send ack\n", psn);
                     send_ack(handler, qp, AETH_ACK_UNLIMITED, prev_psn);
                     continue;
                 } else {
                     fprintf(stderr, "TODO waiting for implementation\n");
-                    exit(1);
+                    assert(false);
                 }
             }
             if (qp->recv_wq->sent_psn_nak) {
@@ -110,7 +109,7 @@ int rxe_handle_recv(datapath_handler *handler) {
                 handler->dma_write_payload_to_host(qp, reinterpret_cast<void *>(reinterpret_cast<char *>(bth) + rxe_opcode[opcode].offset[RXE_PAYLOAD]), payload_size);
             } else if (mask & RXE_READ_MASK) {
                 fprintf(stderr, "TODO waiting for implementation\n");
-                exit(1);
+                assert(false);
             }
 
             qp->recv_wq->psn = (psn + 1) & BTH_PSN_MASK;
@@ -150,7 +149,7 @@ int rxe_handle_recv(datapath_handler *handler) {
                         continue;
                     } else {
                         fprintf(stderr, "TODO waiting for implementation\n");
-                        exit(1);
+                        assert(false);
                     }
                 }
                 diff = psn_compare(psn, qp->comp_info->psn);
@@ -171,7 +170,7 @@ int rxe_handle_recv(datapath_handler *handler) {
                     break;
                 case AETH_NAK:
                     fprintf(stderr, "TODO waiting for implementation\n");
-                    exit(1);
+                    assert(false);
                 }
 
                 if (send_wqe->state == dpu_send_wqe_state_pending && send_wqe->last_psn == psn) {
@@ -204,7 +203,7 @@ int rxe_handle_recv(datapath_handler *handler) {
             }
             handler->rxpath_handler->recv_offset_handler.step();
         }
-        assert(ibv_post_wq_recv(handler->rxpath_handler->recv_wq, handler->rxpath_handler->recv_wr, &handler->rxpath_handler->recv_bad_wr) == 0);
+        assert(ibv_post_recv(handler->rxpath_handler->send_recv_qp, handler->rxpath_handler->recv_wr, &handler->rxpath_handler->recv_bad_wr) == 0);
         recv_finish -= now_post_recv;
     }
 
