@@ -467,7 +467,7 @@ public:
         if (wr_index == 0) {
             return;
         }
-        assert(ibv_post_send(send_qp, send_wr, &send_bad_wr) == 0);
+        assert(ibv_post_send(send_recv_qp, send_wr, &send_bad_wr) == 0);
         wr_index = 0;
     }
     inline void poll_tx_cq() {
@@ -486,7 +486,7 @@ public:
 class alignas(64) rxpath_handler {
 
 public:
-    rxpath_handler(ibv_context *all_rx_context, ibv_pd *all_rx_pd, void *buf_addr, size_t recv_buf_size);
+    rxpath_handler(ibv_context *all_rx_context, ibv_pd *all_rx_pd, txpath_handler *tx_handler, void *buf_addr, size_t recv_buf_size);
 
     ~rxpath_handler();
 
@@ -496,7 +496,7 @@ public:
     /* Exclusive for each handler */
     ibv_mr *mr;
     ibv_cq *recv_cq;
-    ibv_wq *recv_wq;
+    ibv_qp *send_recv_qp;
     ibv_sge *recv_sge_list;
     ibv_recv_wr *recv_wr;
     ibv_recv_wr *recv_bad_wr;
@@ -527,6 +527,7 @@ public:
 
     phmap::flat_hash_set<dpu_qp *>active_qp_list;
     phmap::parallel_flat_hash_set<dpu_datapath_send_wq *>active_datapath_send_wq_list;
+    spinlock_mutex active_datapath_send_wq_list_mutex;
 
     void loop_datapath_send_wq();
 
@@ -534,9 +535,9 @@ public:
 
     size_t handle_recv();
 
-    void dma_send_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
+    void dma_send_payload_to_host(dpu_qp *qp, uint64_t paylod_buf, uint64_t pkt_buf, size_t payload_size);
 
-    void dma_write_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size);
+    void dma_write_payload_to_host(dpu_qp *qp, uint64_t paylod_buf, uint64_t pkt_buf, size_t payload_size);
 
     void dma_send_cq_to_host(dpu_qp *qp);
 
@@ -545,7 +546,6 @@ public:
 
 class datapath_manager {
 private:
-    void create_raw_packet_main_qp();
     void create_main_flow();
 public:
     datapath_manager(ibv_context *all_context, ibv_pd *all_pd, size_t numa_node, bool is_server);
@@ -554,14 +554,12 @@ public:
     bool is_server;
     size_t numa_node;
 
-    std::vector<datapath_handler> datapath_handler_list;
+    std::array<datapath_handler, SMARTNS_TX_RX_CORE> datapath_handler_list;
 
     ibv_context *global_context;
     ibv_pd *global_pd;
-    ibv_qp *main_rss_qp{ nullptr };
-    ibv_rwq_ind_table *main_rwq_ind_table;
     size_t main_rss_size;
-    ibv_flow *main_flow{ nullptr };
+    std::vector<ibv_flow *>main_flows;
 
     std::vector<void *>txpath_send_buf_list;
     std::vector<void *>rxpath_recv_buf_list;

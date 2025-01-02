@@ -4,62 +4,9 @@
 #include "rxe/rxe.h"
 #include "raw_packet/raw_packet.h"
 
-void datapath_manager::create_raw_packet_main_qp() {
-    size_t rxq_size = SMARTNS_TX_RX_CORE;
-    if (!is_log2(rxq_size)) {
-        struct ibv_device_attr_ex attr;
-        assert(ibv_query_device_ex(global_context, 0, &attr) == 0);
-        rxq_size = attr.rss_caps.max_rwq_indirection_table_size;
-        if (rxq_size < SMARTNS_TX_RX_CORE) {
-            SMARTNS_ERROR("RSS table size is too small\n");
-            exit(1);
-        }
-    }
-    ibv_wq **wqs = new ibv_wq * [rxq_size];
-    for (size_t i = 0;i < rxq_size;i++) {
-        wqs[i] = datapath_handler_list[i % SMARTNS_TX_RX_CORE].rxpath_handler->recv_wq;
-    }
-
-    assert(is_log2(rxq_size));
-
-    main_rss_size = rxq_size;
-
-    ibv_rwq_ind_table_init_attr rwq_ind_table_init_attr;
-    rwq_ind_table_init_attr.log_ind_tbl_size = std::log2(rxq_size);
-    rwq_ind_table_init_attr.ind_tbl = wqs;
-    rwq_ind_table_init_attr.comp_mask = 0;
-
-    assert(main_rwq_ind_table = ibv_create_rwq_ind_table(global_context, &rwq_ind_table_init_attr));
-
-    delete[]wqs;
-
-    assert(main_rss_qp == nullptr && main_flow == nullptr);
-    assert(global_context != nullptr && global_pd != nullptr);
-
-    struct ibv_qp_init_attr_ex qp_init_attr_ex;
-    memset(&qp_init_attr_ex, 0, sizeof(qp_init_attr_ex));
-
-    qp_init_attr_ex.qp_context = nullptr;
-    qp_init_attr_ex.srq = nullptr;
-    qp_init_attr_ex.cap.max_inline_data = 0;
-    qp_init_attr_ex.qp_type = IBV_QPT_RAW_PACKET;
-    qp_init_attr_ex.pd = global_pd;
-    qp_init_attr_ex.create_flags = 0; //ibv_qp_create_flags 
-    qp_init_attr_ex.rwq_ind_tbl = main_rwq_ind_table;
-    qp_init_attr_ex.rx_hash_conf.rx_hash_function = IBV_RX_HASH_FUNC_TOEPLITZ;
-    qp_init_attr_ex.rx_hash_conf.rx_hash_key_len = RSS_HASH_KEY_LENGTH;
-    qp_init_attr_ex.rx_hash_conf.rx_hash_key = RSS_KEY;
-    qp_init_attr_ex.rx_hash_conf.rx_hash_fields_mask = IBV_RX_HASH_SRC_IPV4 | IBV_RX_HASH_DST_IPV4 |
-        IBV_RX_HASH_SRC_PORT_UDP | IBV_RX_HASH_DST_PORT_UDP;
-
-    qp_init_attr_ex.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_IND_TABLE | IBV_QP_INIT_ATTR_RX_HASH;
-
-    assert(main_rss_qp = ibv_create_qp_ex(global_context, &qp_init_attr_ex));
-}
-
 void datapath_manager::create_main_flow() {
-    assert(main_flow == nullptr);
-    assert(main_rss_qp != nullptr && global_context != nullptr && global_context != nullptr);
+    assert(global_context != nullptr);
+    assert(datapath_handler_list.size() == SMARTNS_TX_RX_CORE);
 
     size_t flow_attr_total_size = sizeof(ibv_flow_attr) + sizeof(ibv_flow_spec_eth) + sizeof(ibv_flow_spec_tcp_udp);
 
@@ -86,12 +33,18 @@ void datapath_manager::create_main_flow() {
     }
     memset(flow_spec_eth->mask.dst_mac, 0xFF, 6);
 
-    flow_spec_udp->type = IBV_FLOW_SPEC_UDP;
-    flow_spec_udp->size = sizeof(ibv_flow_spec_tcp_udp);
-    flow_spec_udp->val.dst_port = htons(SMARTNS_UDP_MAGIC_PORT);
-    flow_spec_udp->mask.dst_port = 0xFFFF;
+    for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
+        flow_spec_udp->type = IBV_FLOW_SPEC_UDP;
+        flow_spec_udp->size = sizeof(ibv_flow_spec_tcp_udp);
+        flow_spec_udp->val.dst_port = htons(SMARTNS_UDP_MAGIC_PORT + i);
+        flow_spec_udp->mask.dst_port = 0xFFFF;
+        // flow_spec_udp->val.src_port = htons(SMARTNS_UDP_MAGIC_PORT + i);
+        // flow_spec_udp->mask.src_port = 0xFFFF;
+        ibv_flow *flow = ibv_create_flow(datapath_handler_list[i].txpath_handler->send_recv_qp, flow_attr);
+        assert(flow);
+        main_flows.push_back(flow);
+    }
 
-    assert(main_flow = ibv_create_flow(main_rss_qp, flow_attr));
     free(header_buff);
 }
 
@@ -121,33 +74,22 @@ datapath_manager::datapath_manager(ibv_context *all_context, ibv_pd *all_pd, siz
     }
 
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
-
-        txpath_handler *tx_handler = new txpath_handler(global_context, global_pd, txpath_send_buf_list[i], SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER);
-        rxpath_handler *rx_handler = new rxpath_handler(global_context, global_pd, rxpath_recv_buf_list[i], SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
-        dma_handler *dma_handler = new ::dma_handler(global_context, global_pd);
-        struct ibv_wc *wc_send_recv = new ibv_wc[CTX_POLL_BATCH];
-        datapath_handler_list.push_back({ i,i, dma_handler, tx_handler, rx_handler,wc_send_recv });
+        datapath_handler &handler = datapath_handler_list[i];
+        handler.txpath_handler = new txpath_handler(global_context, global_pd, txpath_send_buf_list[i], SMARTNS_TX_DEPTH * SMARTNS_TX_PACKET_BUFFER);
+        handler.rxpath_handler = new rxpath_handler(global_context, global_pd, handler.txpath_handler, rxpath_recv_buf_list[i], SMARTNS_RX_DEPTH * SMARTNS_RX_PACKET_BUFFER);
+        handler.dma_handler = new dma_handler(global_context, global_pd);
+        handler.wc_send_recv = new ibv_wc[CTX_POLL_BATCH];
     }
 
-    create_raw_packet_main_qp();
     create_main_flow();
-
 
     // init tx path, include udp src port and init send buffer
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
         ipv4_tuple v4_tuple;
         v4_tuple.src_addr = is_server ? ip_to_uint32(server_ip) : ip_to_uint32(client_ip);
         v4_tuple.dst_addr = is_server ? ip_to_uint32(client_ip) : ip_to_uint32(server_ip);
-        v4_tuple.dport = SMARTNS_UDP_MAGIC_PORT;
-        for (uint16_t j = SMARTNS_UDP_MAGIC_PORT + 1;j < 65535;j++) {
-            v4_tuple.sport = j;
-            uint32_t rss = calculate_soft_rss(v4_tuple, RSS_KEY);
-            if ((rss % main_rss_size) % SMARTNS_TX_RX_CORE == i) {
-                datapath_handler_list[i].txpath_handler->src_port = j;
-                break;
-            }
-            assert(j != 65535);
-        }
+        v4_tuple.dport = SMARTNS_UDP_MAGIC_PORT + i;
+        v4_tuple.sport = SMARTNS_UDP_MAGIC_PORT + i;
         for (size_t j = 0;j < SMARTNS_TX_DEPTH;j++) {
             udp_packet *packet = reinterpret_cast<udp_packet *>(reinterpret_cast<size_t>(txpath_send_buf_list[i]) + j * SMARTNS_TX_PACKET_BUFFER);
 
@@ -158,9 +100,9 @@ datapath_manager::datapath_manager(ibv_context *all_context, ibv_pd *all_pd, siz
 }
 
 datapath_manager::~datapath_manager() {
-    ibv_destroy_flow(main_flow);
-    ibv_destroy_qp(main_rss_qp);
-    ibv_destroy_rwq_ind_table(main_rwq_ind_table);
+    for (size_t i = 0;i < main_flows.size();i++) {
+        ibv_destroy_flow(main_flows[i]);
+    }
 
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
         free_huge_mem(txpath_send_buf_list[i]);
@@ -195,30 +137,32 @@ txpath_handler::txpath_handler(ibv_context *context, ibv_pd *pd, void *buf_addr,
 
     assert(mr = ibv_reg_mr(pd, buf_addr, send_buf_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
     assert(send_cq = ibv_create_cq(context, tx_depth, NULL, NULL, 0));
-
+    assert(recv_cq = ibv_create_cq(context, SMARTNS_RX_DEPTH, NULL, NULL, 0));
     struct ibv_qp_init_attr tx_qp_init_attr;
     memset(&tx_qp_init_attr, 0, sizeof(tx_qp_init_attr));
     tx_qp_init_attr.send_cq = send_cq;
-    tx_qp_init_attr.recv_cq = send_cq;
+    tx_qp_init_attr.recv_cq = recv_cq;
     tx_qp_init_attr.cap.max_send_wr = tx_depth;
     tx_qp_init_attr.cap.max_send_sge = num_sges_per_wr;
+    tx_qp_init_attr.cap.max_recv_wr = SMARTNS_RX_DEPTH;
+    tx_qp_init_attr.cap.max_recv_sge = SMARTNS_RX_SEG;
     tx_qp_init_attr.cap.max_inline_data = 0;
     tx_qp_init_attr.qp_type = IBV_QPT_RAW_PACKET;
-    assert(send_qp = ibv_create_qp(pd, &tx_qp_init_attr));
+    assert(send_recv_qp = ibv_create_qp(pd, &tx_qp_init_attr));
 
     struct ibv_qp_attr tx_qp_attr;
     memset(&tx_qp_attr, 0, sizeof(tx_qp_attr));
     tx_qp_attr.qp_state = IBV_QPS_INIT;
     tx_qp_attr.port_num = 1;
-    assert(ibv_modify_qp(send_qp, &tx_qp_attr, IBV_QP_STATE | IBV_QP_PORT) == 0);
+    assert(ibv_modify_qp(send_recv_qp, &tx_qp_attr, IBV_QP_STATE | IBV_QP_PORT) == 0);
 
     memset(&tx_qp_attr, 0, sizeof(tx_qp_attr));
     tx_qp_attr.qp_state = IBV_QPS_RTR;
-    assert(ibv_modify_qp(send_qp, &tx_qp_attr, IBV_QP_STATE) == 0);
+    assert(ibv_modify_qp(send_recv_qp, &tx_qp_attr, IBV_QP_STATE) == 0);
 
     memset(&tx_qp_attr, 0, sizeof(tx_qp_attr));
     tx_qp_attr.qp_state = IBV_QPS_RTS;
-    assert(ibv_modify_qp(send_qp, &tx_qp_attr, IBV_QP_STATE) == 0);
+    assert(ibv_modify_qp(send_recv_qp, &tx_qp_attr, IBV_QP_STATE) == 0);
 
     for (size_t i = 0;i < num_wrs;i++) {
         for (size_t j = 0;j < num_sges_per_wr;j++) {
@@ -241,12 +185,13 @@ txpath_handler::~txpath_handler() {
     free(send_wr);
     free(send_bad_wr);
 
-    ibv_destroy_qp(send_qp);
+    ibv_destroy_qp(send_recv_qp);
     ibv_destroy_cq(send_cq);
+    ibv_destroy_cq(recv_cq);
     ibv_dereg_mr(mr);
 }
 
-rxpath_handler::rxpath_handler(ibv_context *all_rx_context, ibv_pd *all_rx_pd, void *buf_addr, size_t recv_buf_size):
+rxpath_handler::rxpath_handler(ibv_context *all_rx_context, ibv_pd *all_rx_pd, txpath_handler *tx_handler, void *buf_addr, size_t recv_buf_size):
     recv_offset_handler(SMARTNS_RX_DEPTH, SMARTNS_RX_PACKET_BUFFER, 0),
     recv_comp_offset_handler(SMARTNS_RX_DEPTH, SMARTNS_RX_PACKET_BUFFER, 0) {
     context = all_rx_context;
@@ -263,26 +208,9 @@ rxpath_handler::rxpath_handler(ibv_context *all_rx_context, ibv_pd *all_rx_pd, v
     ALLOCATE(recv_bad_wr, struct ibv_recv_wr, 1);
 
     assert(mr = ibv_reg_mr(pd, buf_addr, recv_buf_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ));
-    assert(recv_cq = ibv_create_cq(context, rx_depth, NULL, NULL, 0));
 
-    // create wq
-    ibv_wq_init_attr wq_init_attr;
-    memset(&wq_init_attr, 0, sizeof(wq_init_attr));
-    wq_init_attr.wq_context = nullptr;
-    wq_init_attr.wq_type = IBV_WQT_RQ;
-    wq_init_attr.max_wr = rx_depth;
-    wq_init_attr.max_sge = num_sges_per_wr;
-    wq_init_attr.pd = pd;
-    wq_init_attr.cq = recv_cq;
-    wq_init_attr.create_flags = 0;
-
-    assert(recv_wq = ibv_create_wq(context, &wq_init_attr));
-
-    struct ibv_wq_attr wq_attr;
-    memset(&wq_attr, 0, sizeof(struct ibv_wq_attr));
-    wq_attr.wq_state = IBV_WQS_RDY;
-    wq_attr.attr_mask = IBV_WQ_ATTR_STATE;
-    assert(ibv_modify_wq(recv_wq, &wq_attr) == 0);
+    recv_cq = tx_handler->recv_cq;
+    send_recv_qp = tx_handler->send_recv_qp;
 
     for (size_t i = 0;i < rx_depth;i++) {
         recv_sge_list[0].addr = recv_offset_handler.offset() + recv_buf_addr;
@@ -292,7 +220,7 @@ rxpath_handler::rxpath_handler(ibv_context *all_rx_context, ibv_pd *all_rx_pd, v
         recv_wr->sg_list = recv_sge_list;
         recv_wr->wr_id = recv_offset_handler.offset() + recv_buf_addr;
         recv_wr->next = nullptr;
-        assert(ibv_post_wq_recv(recv_wq, recv_wr, &recv_bad_wr) == 0);
+        assert(ibv_post_recv(send_recv_qp, recv_wr, &recv_bad_wr) == 0);
         recv_offset_handler.step();
     }
 
@@ -315,8 +243,6 @@ rxpath_handler::~rxpath_handler() {
     free(recv_wr);
     free(recv_bad_wr);
 
-    ibv_destroy_wq(recv_wq);
-    ibv_destroy_cq(recv_cq);
     ibv_dereg_mr(mr);
 }
 
@@ -340,8 +266,6 @@ dma_handler::dma_handler(ibv_context *context, ibv_pd *pd) {
     invalid_finish_index_list = new uint32_t[SMARTNS_DMA_GROUP_SIZE];
 
     now_use_qp_index = 0;
-    qp_group_size = SMARTNS_DMA_GROUP_SIZE;
-
 
     for (size_t i = 0;i < SMARTNS_DMA_GROUP_SIZE;i++) {
         ibv_qp *dma_qp = create_dma_qp(context, pd, dma_send_recv_cq, dma_send_recv_cq, 256);
@@ -408,9 +332,15 @@ dma_handler::~dma_handler() {
 }
 
 size_t datapath_handler::handle_send() {
-    for (auto qp : active_qp_list) {
-        rxe_handle_req(this, qp);
+    for (auto qp = active_qp_list.begin();qp != active_qp_list.end();) {
+        int ret = rxe_handle_req(this, *qp);
+        if (ret == -1) {
+            qp = active_qp_list.erase(qp);
+        } else {
+            qp++;
+        }
     }
+
     txpath_handler->commit_flush();
     txpath_handler->poll_tx_cq();
     return 0;
@@ -421,17 +351,20 @@ size_t datapath_handler::handle_recv() {
     return recv;
 }
 
-void datapath_handler::dma_send_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size) {
+void datapath_handler::dma_send_payload_to_host(dpu_qp *qp, uint64_t paylod_buf, uint64_t pkt_buf, size_t payload_size) {
     dpu_recv_wq *recv_wq = qp->recv_wq;
     smartns_recv_wqe *recv_wqe = qp->recv_wq->get_next_wqe();
     size_t now_size = payload_size;
-    uint64_t now_buf_addr = reinterpret_cast<uint64_t>(paylod_buf);
-
+    uint64_t now_buf_addr = paylod_buf;
+    // only first pkt have header
+    // we need to record which dma is first pkt
+    uint64_t now_pkt_buf = pkt_buf;
     for (;recv_wq->now_sge_num < recv_wq->max_sge;recv_wq->now_sge_num++) {
         assert(recv_wqe[recv_wq->now_sge_num].lkey != 100);
         uint32_t remain_sge_byte = recv_wqe[recv_wq->now_sge_num].byte_count - recv_wq->now_sge_offset;
         if (remain_sge_byte >= now_size) {
-            dma_handler->post_dma_req_without_cq(recv_wqe[recv_wq->now_sge_num].lkey, recv_wqe[recv_wq->now_sge_num].addr + recv_wq->now_sge_offset, rxpath_handler->mr->lkey, now_buf_addr, now_size);
+            dma_handler->post_dma_req_without_cq(recv_wqe[recv_wq->now_sge_num].lkey, recv_wqe[recv_wq->now_sge_num].addr + recv_wq->now_sge_offset, rxpath_handler->mr->lkey, now_buf_addr, now_pkt_buf, now_size);
+
             recv_wq->now_total_dma_byte += now_size;
             recv_wq->now_sge_offset += now_size;
             now_size = 0;
@@ -441,9 +374,11 @@ void datapath_handler::dma_send_payload_to_host(dpu_qp *qp, void *paylod_buf, si
             }
             break;
         } else {
-            dma_handler->post_dma_req_without_cq(recv_wqe[recv_wq->now_sge_num].lkey, recv_wqe[recv_wq->now_sge_num].addr + recv_wq->now_sge_offset, rxpath_handler->mr->lkey, now_buf_addr, remain_sge_byte);
+            dma_handler->post_dma_req_without_cq(recv_wqe[recv_wq->now_sge_num].lkey, recv_wqe[recv_wq->now_sge_num].addr + recv_wq->now_sge_offset, rxpath_handler->mr->lkey, now_buf_addr, now_pkt_buf, remain_sge_byte);
             recv_wq->now_total_dma_byte += remain_sge_byte;
             now_buf_addr += remain_sge_byte;
+            // set to same as buf_addr, means without pkt header
+            now_pkt_buf = now_buf_addr;
             now_size -= remain_sge_byte;
             recv_wq->now_sge_offset = 0;
         }
@@ -452,11 +387,11 @@ void datapath_handler::dma_send_payload_to_host(dpu_qp *qp, void *paylod_buf, si
     return;
 }
 
-void datapath_handler::dma_write_payload_to_host(dpu_qp *qp, void *paylod_buf, size_t payload_size) {
+void datapath_handler::dma_write_payload_to_host(dpu_qp *qp, uint64_t paylod_buf, uint64_t pkt_buf, size_t payload_size) {
     dpu_recv_wq *recv_wq = qp->recv_wq;
 
     dma_handler->post_dma_req_without_cq(recv_wq->mr->devx_mr->lkey, recv_wq->host_va + recv_wq->offset,
-        rxpath_handler->mr->lkey, reinterpret_cast<size_t>(paylod_buf), payload_size);
+        rxpath_handler->mr->lkey, reinterpret_cast<size_t>(paylod_buf), pkt_buf, payload_size);
 
     recv_wq->offset += payload_size;
     recv_wq->resid -= payload_size;
@@ -477,6 +412,7 @@ void datapath_handler::dma_recv_cq_to_host(dpu_qp *qp) {
 }
 
 void datapath_handler::loop_datapath_send_wq() {
+    active_datapath_send_wq_list_mutex.lock();
     for (auto datapath_send_wq : active_datapath_send_wq_list) {
         smartns_send_wqe *wqe;
         while ((wqe = datapath_send_wq->get_next_wqe()) != nullptr) {
@@ -511,4 +447,5 @@ void datapath_handler::loop_datapath_send_wq() {
             send_wq->step_head();
         }
     }
+    active_datapath_send_wq_list_mutex.unlock();
 }

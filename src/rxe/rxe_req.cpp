@@ -58,7 +58,7 @@ void init_req_packet(datapath_handler *handler, dpu_qp *qp, dpu_send_wqe *wqe, i
         reth->va = wqe->remote_addr;
         reth->len = wqe->byte_count;
     }
-
+    // printf("[%ld] index %ld, psn %u\n", handler->thread_id, handler->txpath_handler->send_offset_handler.index(), psn);
     if (mask & RXE_WRITE_OR_SEND) {
         handler->txpath_handler->commit_pkt_with_payload(wqe->local_addr + wqe->cur_pkt_offset, wqe->local_lkey, header_size, payload);
     } else {
@@ -70,7 +70,12 @@ void init_req_packet(datapath_handler *handler, dpu_qp *qp, dpu_send_wqe *wqe, i
 int rxe_handle_req(datapath_handler *handler, dpu_qp *qp) {
     dpu_send_wq *send_wq = qp->send_wq;
     int total_send = 0;
-    assert(!send_wq->is_empty());
+
+    // delete from active qp list
+    if (send_wq->is_empty()) {
+        return -1;
+    }
+
     for (;send_wq->wqe_index != send_wq->head;) {
         // TODO
         dpu_send_wqe *send_wqe = send_wq->get_wqe(send_wq->wqe_index);

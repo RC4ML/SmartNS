@@ -21,13 +21,14 @@ static_assert(sizeof(smartns_recv_wqe) == 16);
 static_assert(sizeof(smartns_cqe) == 64);
 static_assert(sizeof(smartns_cq_doorbell) == 64);
 
-struct smartns_dma_wq {
+struct alignas(64) smartns_dma_wq {
     const size_t signal_batch_size = 16;
     struct ibv_qp *dma_qp;
     struct ibv_qp_ex *dma_qpx;
     struct mlx5dv_qp_ex *dma_mqpx;
     uint64_t start_index;
     uint64_t dma_index;
+    uint64_t last_signal_index;
     uint64_t finish_index;
     uint64_t max_num;
     size_t dma_batch_size = 1;
@@ -43,6 +44,9 @@ struct smartns_dma_wq {
     inline void step_dma_req(uint32_t bf_lkey, uint32_t host_lkey) {
         start_index++;
         assert(start_index - finish_index <= max_num);
+        if (start_index >= dma_index + dma_batch_size) {
+            flush_dma_req(bf_lkey, host_lkey);
+        }
         // if (start_index >= dma_index + dma_batch_size) {
         //     uint32_t offset = (dma_index & (wqe_cnt - 1)) * wqe_size;
         //     dma_qpx->wr_id = start_index;
@@ -53,12 +57,15 @@ struct smartns_dma_wq {
     }
 
     inline void flush_dma_req(uint32_t bf_lkey, uint32_t host_lkey) {
-        if (start_index > dma_index) {
+        if (start_index > dma_index && start_index - dma_index >= dma_batch_size) {
             uint32_t offset = (dma_index & (wqe_cnt - 1)) * wqe_size;
             dma_qpx->wr_id = start_index;
-            dma_qpx->wr_flags = (start_index % signal_batch_size) == 0 ? IBV_SEND_SIGNALED : 0;
+            dma_qpx->wr_flags = start_index - last_signal_index >= signal_batch_size ? IBV_SEND_SIGNALED : 0;
             dma_mqpx->wr_memcpy_direct(dma_mqpx, bf_lkey, reinterpret_cast<uint64_t>(bf_addr) + offset, host_lkey, reinterpret_cast<uint64_t>(host_addr) + offset, (start_index - dma_index) * wqe_size);
             dma_index = start_index;
+            if (dma_qpx->wr_flags == IBV_SEND_SIGNALED) {
+                last_signal_index = start_index;
+            }
         }
     }
 

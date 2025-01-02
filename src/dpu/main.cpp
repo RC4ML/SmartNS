@@ -7,7 +7,7 @@ std::atomic<bool> stop_flag = false;
 
 void ctrl_c_handler(int) { stop_flag = true; }
 
-void server_datapath(datapath_handler *handler) {
+void server_datapath(datapath_manager *data_manager, datapath_handler *handler) {
     wait_scheduling(FLAGS_numaNode, handler->cpu_id);
 
     while (!stop_flag) {
@@ -137,18 +137,18 @@ int main(int argc, char *argv[]) {
     printf("is server %d\n", FLAGS_is_server);
 
     size_t now_cpu_id = 0;
-    for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
-        data_manager->datapath_handler_list[i].cpu_id = now_cpu_id;
-        threads.emplace_back(std::thread(server_datapath, &data_manager->datapath_handler_list[i]));
-        bind_to_core(threads[i], FLAGS_numaNode, now_cpu_id);
-        now_cpu_id++;
-    }
-
     control_manager->cpu_id = now_cpu_id;
     threads.emplace_back(std::thread(host_controlpath, control_manager));
-    bind_to_core(threads[SMARTNS_TX_RX_CORE], FLAGS_numaNode, now_cpu_id);
-
+    bind_to_core(threads[now_cpu_id], FLAGS_numaNode, now_cpu_id);
     now_cpu_id++;
+
+    for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
+        data_manager->datapath_handler_list[i].cpu_id = now_cpu_id;
+        data_manager->datapath_handler_list[i].thread_id = i;
+        threads.emplace_back(std::thread(server_datapath, data_manager, &data_manager->datapath_handler_list[i]));
+        bind_to_core(threads[now_cpu_id], FLAGS_numaNode, now_cpu_id);
+        now_cpu_id++;
+    }
 
     for (size_t i = 0;i < threads.size();i++) {
         threads[i].join();

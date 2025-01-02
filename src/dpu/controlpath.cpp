@@ -73,8 +73,9 @@ void controlpath_manager::handle_open_device(SMARTNS_OPEN_DEVICE_PARAMS *param) 
     dpu_ctx->inner_bf_mr = devx_reg_mr(global_pd, bf_mr_base, SMARTNS_CONTEXT_ALLOC_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
     assert(devx_mr_allow_other_vhca_access(dpu_ctx->inner_bf_mr, vhca_access_key, sizeof(vhca_access_key)) == 0);
 
+    dpu_ctx->datapath_send_wq_list.resize(SMARTNS_TX_RX_CORE);
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
-        dpu_datapath_send_wq datapath_send_wq;
+        dpu_datapath_send_wq &datapath_send_wq = dpu_ctx->datapath_send_wq_list[i];
         datapath_send_wq.dpu_ctx = dpu_ctx;
         datapath_send_wq.datapath_send_wq_id = i;
         datapath_send_wq.bf_datapath_send_wq_buf = bf_mr_base;
@@ -84,15 +85,15 @@ void controlpath_manager::handle_open_device(SMARTNS_OPEN_DEVICE_PARAMS *param) 
         datapath_send_wq.head = 0;
         datapath_send_wq.own_flag = 1;
 
-        dpu_ctx->datapath_send_wq_list.emplace_back(datapath_send_wq);
-
         bf_mr_base = reinterpret_cast<void *>(reinterpret_cast<size_t>(bf_mr_base) + sizeof(smartns_send_wqe) * SMARTNS_TX_DEPTH);
     }
 
     // add datapath_send_wq to each datapath's handler
     // warning: this  address maybe change?
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
+        data_manager->datapath_handler_list[i].active_datapath_send_wq_list_mutex.lock();
         data_manager->datapath_handler_list[i].active_datapath_send_wq_list.insert(&dpu_ctx->datapath_send_wq_list[i]);
+        data_manager->datapath_handler_list[i].active_datapath_send_wq_list_mutex.unlock();
     }
 
     context_list[dpu_ctx->context_number] = dpu_ctx;
@@ -137,7 +138,9 @@ void controlpath_manager::handle_close_device(SMARTNS_CLOSE_DEVICE_PARAMS *param
 
     // del each datapath_send_wq
     for (size_t i = 0;i < SMARTNS_TX_RX_CORE;i++) {
+        data_manager->datapath_handler_list[i].active_datapath_send_wq_list_mutex.lock();
         data_manager->datapath_handler_list[i].active_datapath_send_wq_list.erase(&dpu_ctx->datapath_send_wq_list[i]);
+        data_manager->datapath_handler_list[i].active_datapath_send_wq_list_mutex.unlock();
     }
 
     free(dpu_ctx->inner_bf_mr->addr);
