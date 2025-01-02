@@ -5,8 +5,8 @@
 #include "offset_handler.h"
 #include "config.h"
 
-#define RDMA_TX_DEPTH (256)
-#define RDMA_RX_DEPTH (256)
+#define RDMA_TX_DEPTH (1024)
+#define RDMA_RX_DEPTH (1024)
 #define RDMA_MAX_OUT_READ (1)
 #define RDMA_IB_PORT (1)
 #define RDMA_HOST_GID_INDEX (3)
@@ -16,7 +16,7 @@
 #define MIN_RNR_TIMER	(12)
 #define DEF_QP_TIME     (14)
 #define CTX_POLL_BATCH	(16)
-#define SEND_CQ_BATCH   (32)
+#define SEND_CQ_BATCH   (8)
 #define INFO_FMT "LID %#04x QPN %#06x PSN %#08x RKey %#08x VAddr %#016llx  %s: %02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d"
 
 struct pingpong_info {
