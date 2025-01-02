@@ -120,6 +120,10 @@ set(DPUSOURCES
     ${CMAKE_SOURCE_DIR}/src/dpu/config.cpp
 )
 
+set(EXTRASOURCES 
+    ${CMAKE_SOURCE_DIR}/src/rdma_cm/libsmartns.cpp
+)
+
 set(LIBRARIES ${LIBRARIES} mlx5 ibverbs pthread numa gflags hdr_histogram_static minipcm_static)
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")

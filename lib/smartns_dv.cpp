@@ -82,6 +82,7 @@ struct ibv_context *smartns_open_device(struct ibv_device *ib_dev) {
         send_wq->dma_wq.dma_send_recv_cq = create_dma_cq(context, 256);
         send_wq->dma_wq.start_index = 0;
         send_wq->dma_wq.dma_index = 0;
+        send_wq->dma_wq.last_signal_index = 0;
         send_wq->dma_wq.finish_index = 0;
         send_wq->dma_wq.max_num = 256;
         send_wq->dma_wq.dma_batch_size = 1;
