@@ -8,6 +8,7 @@
 #include "smartns_abi.h"
 #include "phmap.h"
 #include "devx/devx_mr.h"
+#include "spinlock_mutex.h"
 #include "raw_packet/raw_packet.h"
 
 extern std::atomic<bool> stop_flag;
@@ -302,36 +303,42 @@ public:
     uint32_t *invalid_finish_index_list;
 
     uint32_t now_use_qp_index;
-    uint32_t qp_group_size;
 
     // this cq will be shared within all DMA QP
     ibv_cq *dma_send_recv_cq;
     // this cq will be shared within all cache invalid QP and cqe
     ibv_cq *invalid_send_recv_cq;
 
+    void *send_tmp_buffer;
+    size_t send_tmp_buffer_offset = 0;
+    ibv_mr *send_tmp_mr;
+    constexpr static size_t send_tmp_buffer_size = 32 * SMARTNS_RX_PACKET_BUFFER;
+
     inline void post_dma_req_without_cq(uint32_t dest_lkey, uint64_t dest_addr,
-        uint32_t src_lkey, uint64_t src_addr, size_t length) {
+        uint32_t src_lkey, uint64_t src_addr, uint64_t pkt_buffer_addr, size_t length) {
 
         bool is_signal = dma_count_list[now_use_qp_index] % SMARTNS_DMA_BATCH >= (SMARTNS_DMA_BATCH - 1);
 
         dma_count_list[now_use_qp_index]++;
         payload_count_list[now_use_qp_index]++;
 
-        dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
-        dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
-        dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], dest_lkey, dest_addr, src_lkey, src_addr, length);
+        // dma_qpx_list[now_use_qp_index]->wr_id = now_use_qp_index | (payload_count_list[now_use_qp_index] << 32);
+        // dma_qpx_list[now_use_qp_index]->wr_flags = is_signal ? IBV_SEND_SIGNALED : 0;
+        // size_t tmp_src_addr = reinterpret_cast<size_t>(send_tmp_buffer) + send_tmp_buffer_offset;
+        // dma_mqpx_list[now_use_qp_index]->wr_memcpy_direct(dma_mqpx_list[now_use_qp_index], dest_lkey, dest_addr, send_tmp_mr->lkey, tmp_src_addr, length);
+        // send_tmp_buffer_offset = (send_tmp_buffer_offset + SMARTNS_RX_PACKET_BUFFER) % send_tmp_buffer_size;
 
         bool is_invalid_signal = invalid_start_index_list[now_use_qp_index] % 16 == 15;
         invalid_qpx_list[now_use_qp_index]->wr_id = 0;
         invalid_qpx_list[now_use_qp_index]->wr_flags = is_invalid_signal ? IBV_SEND_SIGNALED : 0;
 
-        invalid_mqpx_list[now_use_qp_index]->wr_invcache_direct_prefill(invalid_mqpx_list[now_use_qp_index], src_lkey, src_addr, length, false);
+        invalid_mqpx_list[now_use_qp_index]->wr_invcache_direct(invalid_mqpx_list[now_use_qp_index], src_lkey, pkt_buffer_addr, round_up((pkt_buffer_addr - src_addr + length), 64), false);
         invalid_start_index_list[now_use_qp_index]++;
 
         if (is_signal) {
             dma_count_list[now_use_qp_index] = 0;
             payload_count_list[now_use_qp_index] = 0;
-            now_use_qp_index = (now_use_qp_index + 1) % qp_group_size;
+            now_use_qp_index = (now_use_qp_index + 1) % SMARTNS_DMA_GROUP_SIZE;
         }
     }
 
@@ -355,12 +362,11 @@ public:
                 SMARTNS_ERROR("dma cq error %d %ld\n", wc[i].status, wc[i].wr_id);
                 exit(-1);
             }
-            uint64_t wr_id = wc[i].wr_id;
-            uint32_t qp_index = wr_id & 0xFFFFFFFF;
-            uint32_t payload_count = wr_id >> 32;
-            invalid_mqpx_list[qp_index]->wr_invcache_direct_flush(invalid_mqpx_list[qp_index], invalid_finish_index_list[qp_index], payload_count);
-            invalid_finish_index_list[qp_index] += payload_count;
-            total_finish_dma += payload_count;
+            // uint64_t wr_id = wc[i].wr_id;
+            // uint32_t qp_index = wr_id & 0xFFFFFFFF;
+            // uint32_t payload_count = wr_id >> 32;
+            // hack: already free the buffer when do dma ops
+            // total_finish_dma += payload_count;
         }
 
         num_wc = ibv_poll_cq(invalid_send_recv_cq, 16, wc);
@@ -384,7 +390,8 @@ public:
 
     ibv_mr *mr;
     ibv_cq *send_cq;
-    ibv_qp *send_qp;
+    ibv_cq *recv_cq;
+    ibv_qp *send_recv_qp;
     ibv_sge *send_sge_list;
     ibv_send_wr *send_wr;
     ibv_send_wr *send_bad_wr;
@@ -401,6 +408,7 @@ public:
 
     // calculate rss and select special port for remote server 
     uint16_t src_port;
+    uint16_t dst_port;
 
     uint32_t batch_index;
     uint32_t wr_index;

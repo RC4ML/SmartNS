@@ -104,13 +104,15 @@ int rxe_handle_recv(datapath_handler *handler) {
 
             // execute the operation
             if (mask & RXE_SEND_MASK) {
-                handler->dma_send_payload_to_host(qp, reinterpret_cast<void *>(reinterpret_cast<char *>(bth) + rxe_opcode[opcode].offset[RXE_PAYLOAD]), payload_size);
+                handler->dma_send_payload_to_host(qp, reinterpret_cast<uint64_t>(reinterpret_cast<char *>(bth) + rxe_opcode[opcode].offset[RXE_PAYLOAD]), handler->wc_send_recv[i].wr_id, payload_size);
             } else if (mask & RXE_WRITE_MASK) {
-                handler->dma_write_payload_to_host(qp, reinterpret_cast<void *>(reinterpret_cast<char *>(bth) + rxe_opcode[opcode].offset[RXE_PAYLOAD]), payload_size);
+                handler->dma_write_payload_to_host(qp, reinterpret_cast<uint64_t>(reinterpret_cast<char *>(bth) + rxe_opcode[opcode].offset[RXE_PAYLOAD]), handler->wc_send_recv[i].wr_id, payload_size);
             } else if (mask & RXE_READ_MASK) {
                 fprintf(stderr, "TODO waiting for implementation\n");
                 assert(false);
             }
+            // free the buffer immediately due to care about lossy
+            ack_pkt_num++;
 
             qp->recv_wq->psn = (psn + 1) & BTH_PSN_MASK;
             qp->recv_wq->ack_psn = qp->recv_wq->psn;
