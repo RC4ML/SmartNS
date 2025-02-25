@@ -14,3 +14,4 @@ public:
 
 void socket_init(tcp_param &net_param);
 void exchange_data(tcp_param &net_param, char *local_data, char *remote_data, size_t data_size);
+void socket_close(tcp_param &net_param);

@@ -19,36 +19,59 @@
 #define SEND_CQ_BATCH   (8)
 #define INFO_FMT "LID %#04x QPN %#06x PSN %#08x RKey %#08x VAddr %#016llx  %s: %02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d"
 
+/**
+ * @struct pingpong_info
+ * @brief Structure to hold information for RDMA ping-pong communication.
+ * 
+ * This structure contains various fields required for setting up and managing
+ * RDMA (Remote Direct Memory Access) communication, specifically for ping-pong
+ * style messaging.
+ * 
+ * This information needs to be exchanged between the client and server to establish
+ * a connection. Used by connect_qp_rc.
+ * 
+ * @see connect_qp_rc
+ */
 struct pingpong_info {
-    int					lid;
-    int 				qpn;
-    int 				psn;
-    unsigned			rkey;
-    unsigned long long 	vaddr;
-    unsigned char	raw_gid[16];
-    // only used for kernel qp
-    unsigned char mac[6];
-    int					gid_index;
-    int					out_reads;
+    int					lid; /**< Local Identifier (LID) for the RDMA connection. */
+    int 				qpn; /**< Queue Pair Number (QPN) for the RDMA connection. */
+    int 				psn; /**< Packet Sequence Number (PSN) for the RDMA connection. */
+    unsigned			rkey; /**< Remote key for accessing remote memory. */
+    unsigned long long 	vaddr; /**< Virtual address of the remote memory. */
+    unsigned char	raw_gid[16]; /**< Global Identifier (GID) for the RDMA connection, represented as a raw byte array. */
+    unsigned char mac[6]; /**< MAC address, only used for kernel queue pairs. */
+    int					gid_index; /**< Index of the GID in the GID table. */
+    int					out_reads; /**< Number of outstanding reads. */
 };
 
-struct rdma_param {
-    std::string 				device_name;
-    uint8_t						ib_port;
-    int							gid_index;
-    int tx_depth;
-    int rx_depth;
-    int max_out_read;
-    uint32_t max_inline_size;
-    int 						numa_node;
-    int 						batch_size;
-    int 						sge_per_wr;
-    bool use_devx_context;
+/**
+ * @struct rdma_param
+ * @brief Structure to hold parameters for RDMA communication.
+ * 
+ * This structure contains various fields required for setting up and managing
+ * RDMA (Remote Direct Memory Access) communication.
+ * 
+ * @see roce_init
+ */
+struct rdma_param
+{
+    std::string device_name;  /**< Name of the RDMA device. */
+    uint8_t ib_port;          /**< Port number of the RDMA device. */
+    int gid_index;            /**< Index of the GID in the GID table. */
+    int tx_depth;             /**< Depth of the transmit queue. */
+    int rx_depth;             /**< Depth of the receive queue. */
+    int max_out_read;         /**< Maximum number of outstanding reads. */
+    uint32_t max_inline_size; /**< Maximum size of inline data. */
+    int numa_node;            /**< NUMA node for memory allocation. */
+    int batch_size;           /**< Batch size for operations. */
+    int sge_per_wr;           /**< Number of scatter-gather elements per work request. */
+    bool use_devx_context;    /**< Flag to indicate if DevX context is used. */
 
     // following param init by roce_init
-    enum ibv_mtu				cur_mtu;
-    struct ibv_context **contexts;
-    int							num_contexts;
+    enum ibv_mtu cur_mtu;          /**< Current MTU size. */
+    struct ibv_context **contexts; /**< Array of RDMA device contexts. */
+    int num_contexts;              /**< Number of RDMA device contexts. */
+
     rdma_param() {
         ib_port = RDMA_IB_PORT;
 #if defined(__x86_64__)
@@ -107,6 +130,8 @@ void connect_qp_rc(rdma_param &rdma_param, qp_handler &qp_handler, struct pingpo
 void init_wr_base_send_recv(qp_handler &qp_handler);
 
 void init_wr_base_write(qp_handler &qp_handler);
+
+void init_wr_base_read(qp_handler &qp_handler);
 
 void print_pingpong_info(struct pingpong_info *info);
 
