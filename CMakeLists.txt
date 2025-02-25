@@ -126,14 +126,9 @@ set(EXTRASOURCES
 
 set(LIBRARIES ${LIBRARIES} mlx5 ibverbs pthread numa gflags hdr_histogram_static minipcm_static)
 
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
-
-add_executable(smartns ${UTILSOURCES} ${DEVXSOURCES} ${RXESOURCES} ${DPUSOURCES})
-target_link_libraries(smartns ${LIBRARIES})
-
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+add_executable(smartns_dpu ${UTILSOURCES} ${DEVXSOURCES} ${RXESOURCES} ${DPUSOURCES})
+target_link_libraries(smartns_dpu ${LIBRARIES})
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib)
 add_subdirectory(${CMAKE_SOURCE_DIR}/test)
 
-endif ()

@@ -53,3 +53,10 @@ void exchange_data(tcp_param &net_param, char *local_data, char *remote_data, si
     }
     SMARTNS_INFO("TCP exchange data size: %ld\n", data_size);
 }
+
+void socket_close(tcp_param &net_param) {
+    close(net_param.connfd);
+    if (net_param.isServer) {
+        close(net_param.sockfd);
+    }
+}
