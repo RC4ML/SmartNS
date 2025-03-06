@@ -108,13 +108,13 @@ void roce_init(rdma_param &rdma_param, int num_contexts) {
 
 /**
  * @brief Create a qp rc object
- * 
- * @param[in, out] rdma_param 
- * @param[in] buf 
- * @param[in] size 
+ *
+ * @param[in, out] rdma_param
+ * @param[in] buf
+ * @param[in] size
  * @param[out] info to be exchanged with remote
  * @param[in] context_index thread index
- * @return qp_handler* 
+ * @return qp_handler*
  */
 qp_handler *create_qp_rc(rdma_param &rdma_param, void *buf, size_t size, struct pingpong_info *info, int context_index) {
     assert(context_index < rdma_param.num_contexts);
@@ -198,6 +198,7 @@ qp_handler *create_qp_rc(rdma_param &rdma_param, void *buf, size_t size, struct 
     info->rkey = mr->rkey;
     info->out_reads = rdma_param.max_out_read;
     info->vaddr = reinterpret_cast<uintptr_t>(buf);
+    info->mtu = rdma_param.cur_mtu;
     memcpy(info->raw_gid, temp_gid.raw, 16);
 
     qp_handler->buf = reinterpret_cast<size_t> (buf);
@@ -224,13 +225,13 @@ qp_handler *create_qp_rc(rdma_param &rdma_param, void *buf, size_t size, struct 
 
 /**
  * @brief Establish Reliable Connection between two QPs
- * 
+ *
  * QP state will be changed to RTR and RTS
- * 
+ *
  * @param[in] rdma_param
- * @param[in] qp_handler 
- * @param[in] remote_info 
- * @param[in] local_info 
+ * @param[in] qp_handler
+ * @param[in] remote_info
+ * @param[in] local_info
  */
 void connect_qp_rc(rdma_param &rdma_param, qp_handler &qp_handler, struct pingpong_info *remote_info, struct pingpong_info *local_info) {
     struct ibv_ah *ah;//todo
@@ -250,7 +251,7 @@ void connect_qp_rc(rdma_param &rdma_param, qp_handler &qp_handler, struct pingpo
     attr.ah_attr.grh.traffic_class = 0;
 
     //UD does not need below code
-    attr.path_mtu = rdma_param.cur_mtu;
+    attr.path_mtu = static_cast<enum ibv_mtu>(std::min(remote_info->mtu, local_info->mtu));
     attr.dest_qp_num = remote_info->qpn;
     attr.rq_psn = remote_info->psn;
     flags |= (IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN);
@@ -291,10 +292,10 @@ void connect_qp_rc(rdma_param &rdma_param, qp_handler &qp_handler, struct pingpo
 
 /**
  * @brief Init send/recv Work Request
- * 
+ *
  * Will init send_wr, recv_wr, send_sge_list, recv_sge_list
- * 
- * @param[in, out] qp_handler 
+ *
+ * @param[in, out] qp_handler
  */
 void init_wr_base_send_recv(qp_handler &qp_handler) {
     //send
@@ -338,11 +339,11 @@ void init_wr_base_send_recv(qp_handler &qp_handler) {
 
 /**
  * @brief Init write Work Request
- * 
+ *
  * Difference with read is opcode
- * 
+ *
  * Will init send_wr, send_sge_list
- * 
+ *
  * @param[in, out] qp_handler
  * @see init_wr_base_read
  */
@@ -370,12 +371,12 @@ void init_wr_base_write(qp_handler &qp_handler) {
 
 /**
  * @brief Init read Work Request
- * 
+ *
  * Difference with write is opcode
- * 
+ *
  * Will init send_wr, send_sge_list
- * 
- * @param[in, out] qp_handler 
+ *
+ * @param[in, out] qp_handler
  * @see init_wr_base_write
  */
 void init_wr_base_read(qp_handler &qp_handler) {
@@ -417,12 +418,12 @@ void print_pingpong_info(struct pingpong_info *info) {
 
 /**
  * @brief Post Send Work Request
- * 
+ *
  * use ibv_post_send to post send wr
- * 
- * @param[in, out] qp_handler 
- * @param[in] offset 
- * @param[in] length 
+ *
+ * @param[in, out] qp_handler
+ * @param[in] offset
+ * @param[in] length
  */
 void post_send(qp_handler &qp_handler, size_t offset, int length) {
     qp_handler.send_sge_list[0].addr = qp_handler.buf + offset;
@@ -438,15 +439,15 @@ void post_send(qp_handler &qp_handler, size_t offset, int length) {
 
 /**
  * @brief Post Send Work Request in batch
- * 
+ *
  * use ibv_post_send to post send wr
- * 
+ *
  * send_wr will be chained to be send in batch
- * 
- * @param[in, out] qp_handler 
- * @param[in] batch_size 
- * @param[in] handler 
- * @param[in] length 
+ *
+ * @param[in, out] qp_handler
+ * @param[in] batch_size
+ * @param[in] handler
+ * @param[in] length
  */
 void post_send_batch(qp_handler &qp_handler, int batch_size, offset_handler &handler, int length) {
     assert(batch_size <= qp_handler.num_wrs);
@@ -499,11 +500,11 @@ void post_recv_batch(qp_handler &qp_handler, int batch_size, offset_handler &han
 }
 
 /**
- * @brief 
- * 
- * @param[in] qp_handler 
- * @param[in] wc 
- * @return int 
+ * @brief
+ *
+ * @param[in] qp_handler
+ * @param[in] wc
+ * @return int
  */
 int poll_send_cq(qp_handler &qp_handler, struct ibv_wc *wc) {
     int ne = ibv_poll_cq(qp_handler.send_cq, CTX_POLL_BATCH, wc);//if error, ne < 0
