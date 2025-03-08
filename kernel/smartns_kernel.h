@@ -112,6 +112,7 @@ struct PingPongInfo {
     unsigned char mac[6];
     int gid_index;
     int out_reads;
+    int mtu;
 };
 
 int smartns_create_qp_and_send_to_bf(struct smartns_qp_handler *now_info);

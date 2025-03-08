@@ -91,7 +91,7 @@ int smartns_create_qp_and_send_to_bf(struct smartns_qp_handler *now_info) {
     qp_attr.qp_state = IB_QPS_INIT;
     qp_attr.pkey_index = 0;
     qp_attr.port_num = 1;
-    qp_attr.qp_access_flags = IB_ACCESS_REMOTE_WRITE | IB_ACCESS_LOCAL_WRITE;
+    qp_attr.qp_access_flags = IB_ACCESS_REMOTE_WRITE | IB_ACCESS_REMOTE_READ | IB_ACCESS_LOCAL_WRITE;
     if ((ret = ib_modify_qp(now_info->qp, &qp_attr, flags))) {
         pr_err("%s: failed to modify qp to init errno: %d\n", MODULE_NAME, ret);
         return -ENOMEM;
@@ -106,6 +106,7 @@ int smartns_create_qp_and_send_to_bf(struct smartns_qp_handler *now_info) {
     pingpong_info.rkey = now_info->mr->rkey;
     pingpong_info.out_reads = 1;
     pingpong_info.vaddr = now_info->local_dma_buf;
+    pingpong_info.mtu = ilog2(current_mtu / 128);
     memcpy(pingpong_info.raw_gid, temp_gid.raw, 16);
 
     now_info->num_wrs = SMARTNS_NUM_WRS;
@@ -225,7 +226,7 @@ int smartns_init_qp(struct smartns_qp_handler *now_info, struct PingPongInfo *pi
     attr.ah_attr.type = RDMA_AH_ATTR_TYPE_ROCE;
     memcpy(attr.ah_attr.roce.dmac, pingpong_info->mac, 6);
 
-    attr.path_mtu = ilog2(current_mtu / 128);
+    attr.path_mtu = pingpong_info->mtu < ilog2(current_mtu / 128) ? pingpong_info->mtu : ilog2(current_mtu / 128);
     attr.dest_qp_num = pingpong_info->qpn;
     attr.rq_psn = pingpong_info->psn;
     flags |= (IB_QP_AV | IB_QP_PATH_MTU | IB_QP_DEST_QPN | IB_QP_RQ_PSN);
