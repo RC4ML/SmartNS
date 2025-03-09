@@ -204,7 +204,7 @@ qp_handler *create_qp_rc(rdma_param &rdma_param, void *buf, size_t size, struct 
     qp_handler->buf = reinterpret_cast<size_t> (buf);
     qp_handler->send_cq = send_cq;
     qp_handler->recv_cq = recv_cq;
-    qp_handler->max_inline_size = rdma_param.max_out_read;
+    qp_handler->max_inline_size = rdma_param.max_inline_size;
     qp_handler->qp = qp;
     qp_handler->pd = pd;
     qp_handler->mr = mr;
