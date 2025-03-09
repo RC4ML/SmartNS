@@ -24,6 +24,8 @@ int next_opcode(dpu_qp *qp, dpu_send_wqe *wqe, int opcode) {
         }
     case IBV_WR_RDMA_READ:
         return IB_OPCODE_RC_RDMA_READ_REQUEST;
+    case IBV_WR_DRIVER1:
+        return IB_OPCODE_DRIVER1;
     }
     assert(false);
 }
@@ -89,6 +91,23 @@ int rxe_handle_req(datapath_handler *handler, dpu_qp *qp) {
         }
 
         int opcode = next_opcode(qp, send_wqe, send_wqe->opcode);
+        // reserved opcode, used for pipe RTT test
+        if (opcode == IB_OPCODE_DRIVER1) {
+            send_wq->step_wqe_index();
+
+            smartns_cqe *cqe = qp->send_cq->get_next_cqe();
+            cqe->byte_count = send_wqe->byte_count;
+            cqe->cq_opcode = MLX5_CQE_REQ;
+            cqe->mlx5_opcode = send_wqe->opcode;
+            cqe->op_own = qp->send_cq->own_flag;
+            cqe->qpn = qp->qp_number;
+            cqe->wqe_counter = send_wqe->cur_pos;
+
+            handler->dma_send_cq_to_host(qp);
+
+            qp->send_wq->step_tail();
+            continue;
+        }
         int mask = rxe_opcode[opcode].mask;
         int payload = (mask & RXE_WRITE_OR_SEND) ? send_wqe->byte_count - send_wqe->cur_pkt_offset : 0;
         if (payload >= qp->mtu) {

@@ -22,14 +22,14 @@
 /**
  * @struct pingpong_info
  * @brief Structure to hold information for RDMA ping-pong communication.
- * 
+ *
  * This structure contains various fields required for setting up and managing
  * RDMA (Remote Direct Memory Access) communication, specifically for ping-pong
  * style messaging.
- * 
+ *
  * This information needs to be exchanged between the client and server to establish
  * a connection. Used by connect_qp_rc.
- * 
+ *
  * @see connect_qp_rc
  */
 struct pingpong_info {
@@ -42,19 +42,19 @@ struct pingpong_info {
     unsigned char mac[6]; /**< MAC address, only used for kernel queue pairs. */
     int					gid_index; /**< Index of the GID in the GID table. */
     int					out_reads; /**< Number of outstanding reads. */
+    int                 mtu;
 };
 
 /**
  * @struct rdma_param
  * @brief Structure to hold parameters for RDMA communication.
- * 
+ *
  * This structure contains various fields required for setting up and managing
  * RDMA (Remote Direct Memory Access) communication.
- * 
+ *
  * @see roce_init
  */
-struct rdma_param
-{
+struct rdma_param {
     std::string device_name;  /**< Name of the RDMA device. */
     uint8_t ib_port;          /**< Port number of the RDMA device. */
     int gid_index;            /**< Index of the GID in the GID table. */
@@ -126,6 +126,8 @@ void roce_init(rdma_param &rdma_param, int num_contexts);
 qp_handler *create_qp_rc(rdma_param &rdma_param, void *buf, size_t size, struct pingpong_info *info, int context_index);
 
 void connect_qp_rc(rdma_param &rdma_param, qp_handler &qp_handler, struct pingpong_info *remote_info, struct pingpong_info *local_info);
+
+qp_handler *create_qp_raw_packet(rdma_param &rdma_param, void *buf, size_t size, uint32_t tx_depth, uint32_t rx_depth, int context_index);
 
 void init_wr_base_send_recv(qp_handler &qp_handler);
 

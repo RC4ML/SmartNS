@@ -717,6 +717,8 @@ int smartns_poll_cq(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc) {
                 wc->opcode = IBV_WC_RDMA_WRITE;
             } else if (cqe->mlx5_opcode == IBV_WR_RDMA_READ) {
                 wc->opcode = IBV_WC_RDMA_READ;
+            } else if (cqe->mlx5_opcode == IBV_WR_DRIVER1) {
+                wc->opcode = IBV_WC_DRIVER1;
             } else {
                 fprintf(stderr, "Not support %u mlx5 opcode now!\n", cqe->mlx5_opcode);
                 exit(1);
