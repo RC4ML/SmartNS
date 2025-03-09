@@ -43,6 +43,11 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
     offset_handler send_server(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
     offset_handler send_comp_server(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
 
+    size_t tx_depth = FLAGS_outstanding;
+    size_t ops = FLAGS_iterations * (send_recv_buf_size) / FLAGS_payload_size;
+    ops = round_up(ops, FLAGS_batch_size);
+    ops = round_up(ops, SEND_CQ_BATCH);
+
     /**
      * DMA 准备
      */
@@ -57,8 +62,8 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
         exit(__LINE__);
     }
     // CQ
-    ibv_cq *sq_cq = create_dma_cq(resource->pd->context, 1);
-    ibv_cq *rq_cq = create_dma_cq(resource->pd->context, 1);
+    ibv_cq *sq_cq = create_dma_cq(resource->pd->context, tx_depth);
+    ibv_cq *rq_cq = create_dma_cq(resource->pd->context, tx_depth);
     // QP
     ibv_qp *qp = create_dma_qp(resource->pd->context, resource->pd, rq_cq, sq_cq, FLAGS_outstanding);
     init_dma_qp(qp);
@@ -80,26 +85,17 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
     ALLOCATE(wc_send_client, struct ibv_wc, CTX_POLL_BATCH);
     ALLOCATE(wc_send_server, struct ibv_wc, CTX_POLL_BATCH);
 
-    size_t tx_depth = FLAGS_outstanding;
-    size_t ops = FLAGS_iterations * (send_recv_buf_size) / FLAGS_payload_size;
-    ops = round_up(ops, FLAGS_batch_size);
-    ops = round_up(ops, SEND_CQ_BATCH);
-
     /**
      * DMA 发送
      */
-    // <<< DEBUG
-    fprintf(stderr, "thread [%ld]\n", thread_index);
-    // >>> DEBUG
-    // for (size_t i = 0; i < tx_depth; i++)
-    // {
-    //     printf("send_client index %ld\n", send_client.index());
-    //     dma_qpx->wr_id = dma_start_index;
-    //     dma_qpx->wr_flags = IBV_SEND_SIGNALED;
-    //     // DMA Read
-    //     dma_mqpx->wr_memcpy_direct(dma_mqpx, local_mr_mkey, (uint64_t)local_buffer + send_client.offset(), remote_mr_mkey, (uint64_t)resource->addr + send_client.offset(), FLAGS_payload_size);
-    //     send_client.step(1);
-    // }
+    for (size_t i = 0; i < tx_depth; i++)
+    {
+        dma_qpx->wr_id = dma_start_index;
+        dma_qpx->wr_flags = IBV_SEND_SIGNALED;
+        // DMA Read
+        dma_mqpx->wr_memcpy_direct(dma_mqpx, local_mr_mkey, (uint64_t)local_buffer + send_client.offset(), remote_mr_mkey, (uint64_t)resource->addr + send_client.offset(), FLAGS_payload_size);
+        send_client.step(1);
+    }
 
     // number of completion
     size_t ne_send_client, ne_send_server;
@@ -111,6 +107,8 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
     begin_time.tv_sec = 0;
 
     clock_gettime(CLOCK_MONOTONIC, &begin_time);
+    struct timespec last_print_time = begin_time;
+    size_t last_client_index = 0;
     while (!done && !stop_flag)
     {
         // DMA 轮询
@@ -118,10 +116,7 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
         for (size_t i = 0; i < ne_send_client; i++)
         {
             assert(wc_send_client[i].status == IBV_WC_SUCCESS);
-            // <<< DEBUG
-            printf("wc status %s\n", ibv_wc_status_str(wc_send_client[i].status));
-            printf("client send comp index %ld\n", send_comp_client.index());
-            // >>> DEBUG
+            // printf("Client: %6ld Poll CQ\n", send_comp_client.index());
             send_comp_client.step(1);
         }
 
@@ -132,7 +127,7 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
         {
             for (size_t i = 0; i < now_send_num; i++)
             {
-                printf("send_client index %ld\n", send_client.index());
+                // printf("Client: %6ld Post WR\n", send_client.index());
                 dma_qpx->wr_id = dma_start_index;
                 dma_qpx->wr_flags = IBV_SEND_SIGNALED;
                 // DMA Read
@@ -146,7 +141,7 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
         for (size_t i = 0; i < ne_send_server; i++)
         {
             assert(wc_send_server[i].status == IBV_WC_SUCCESS);
-            printf("server send comp index %ld\n", send_comp_server.index());
+            // printf("Server: %6ld Poll CQ\n", send_comp_server.index());
             send_comp_server.step(1);
         }
 
@@ -160,7 +155,7 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
         {
             for (size_t i = 0; i < now_send_num; i++)
             {
-                printf("send_server index %ld\n", send_server.index());
+                // printf("Server: %6ld Post WR\n", send_server.index());
                 // RDMA write to server
                 post_send_batch(*qp_handler, 1, send_server, FLAGS_payload_size);
                 // post_send_batch will step handler
@@ -169,12 +164,29 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
         }
 
         // 结束条件
-        if (send_client.index() >= ops 
-            && send_comp_client.index() >= ops 
-            && send_server.index() >= ops 
-            && send_comp_server.index() >= ops)
+        if (send_client.index() >= ops && send_comp_client.index() >= ops && send_server.index() >= ops && send_comp_server.index() >= ops)
         {
             done = 1;
+        }
+
+        // Print throughput statistics every second
+        struct timespec current_time;
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
+        double elapsed_since_print = (current_time.tv_sec - last_print_time.tv_sec) + 
+                                    (current_time.tv_nsec - last_print_time.tv_nsec) / 1e9;
+
+        if (elapsed_since_print >= 1.0) {  // Print every second
+            double instant_speed = 8.0 * (send_client.index() - last_client_index) * 
+                                  FLAGS_payload_size / elapsed_since_print / 1000 / 1000 / 1000;
+            
+            double elasped_since_begin = (current_time.tv_sec - begin_time.tv_sec) + 
+                                        (current_time.tv_nsec - begin_time.tv_nsec) / 1e9;
+            
+            printf("%ld\t%f\t%f\n", thread_index, elasped_since_begin, instant_speed);
+            
+            // Update tracking variables
+            last_print_time = current_time;
+            last_client_index = send_client.index();
         }
     }
     clock_gettime(CLOCK_MONOTONIC, &end_time);
@@ -182,7 +194,7 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
     double duration = (end_time.tv_sec - begin_time.tv_sec) + (end_time.tv_nsec - begin_time.tv_nsec) / 1e9;
     double speed = 8.0 * send_client.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
 
-    printf("thread [%ld], duration [%f]s, throughput [%f] Gpbs\n", thread_index, duration, speed);
+    printf("thread [%ld], duration [%f]s, throughput [%f] Gbps\n", thread_index, duration, speed);
 
     free(wc_send_client);
     free(wc_send_server);
@@ -450,6 +462,12 @@ void benchmark()
     }
 
     std::vector<std::thread> threads(FLAGS_threads);
+    // print begin time UTC
+    char time_str[100];
+    time_t now = time(NULL);
+    strftime(time_str, 100, "%Y-%m-%d %H:%M:%S", localtime(&now));
+    printf("begin time: %s\n", time_str);
+    printf("Thread\tSecond(s)\tThroughput(Gbps)\n");
     for (size_t i = 0; i < FLAGS_threads; i++)
     {
         // <<< DEBUG
