@@ -127,6 +127,8 @@ qp_handler *create_qp_rc(rdma_param &rdma_param, void *buf, size_t size, struct 
 
 void connect_qp_rc(rdma_param &rdma_param, qp_handler &qp_handler, struct pingpong_info *remote_info, struct pingpong_info *local_info);
 
+qp_handler *create_qp_raw_packet(rdma_param &rdma_param, void *buf, size_t size, uint32_t tx_depth, uint32_t rx_depth, int context_index);
+
 void init_wr_base_send_recv(qp_handler &qp_handler);
 
 void init_wr_base_write(qp_handler &qp_handler);

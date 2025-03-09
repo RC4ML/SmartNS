@@ -290,6 +290,104 @@ void connect_qp_rc(rdma_param &rdma_param, qp_handler &qp_handler, struct pingpo
     // init wr
 }
 
+qp_handler *create_qp_raw_packet(rdma_param &rdma_param, void *buf, size_t size, uint32_t tx_depth, uint32_t rx_depth, int context_index) {
+    assert(context_index < rdma_param.num_contexts);
+    qp_handler *handler;
+    ALLOCATE(handler, qp_handler, 1);
+    uint32_t max_inline_size = 0;
+
+    int num_wrs = rdma_param.batch_size != 0 ? rdma_param.batch_size : 1;
+    int num_sges_per_wr = rdma_param.sge_per_wr != 0 ? rdma_param.sge_per_wr : 1;
+    int num_sges = num_wrs * num_sges_per_wr;
+    struct ibv_sge *send_sge_list;
+    struct ibv_sge *recv_sge_list;
+    struct ibv_send_wr *send_wr;
+    struct ibv_send_wr *send_bar_wr;
+    struct ibv_recv_wr *recv_wr;
+    struct ibv_recv_wr *recv_bar_wr;
+
+    struct ibv_pd *pd;
+    struct ibv_mr *mr;
+    struct ibv_cq *send_cq;
+    struct ibv_cq *recv_cq;
+    struct ibv_comp_channel *channel = NULL;
+    struct ibv_qp *qp;
+
+    int flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;//send/recv/read/write 
+
+    ALLOCATE(send_sge_list, struct ibv_sge, num_sges);
+    ALLOCATE(recv_sge_list, struct ibv_sge, num_sges);
+    ALLOCATE(send_wr, struct ibv_send_wr, num_wrs);
+    ALLOCATE(send_bar_wr, struct ibv_send_wr, 1);
+    ALLOCATE(recv_wr, struct ibv_recv_wr, num_wrs);
+    ALLOCATE(recv_bar_wr, struct ibv_recv_wr, 1);
+
+    //check valid mem
+    assert(size > static_cast<size_t>(PAGE_SIZE));
+    assert((reinterpret_cast<size_t>(buf)) % PAGE_SIZE == 0);
+
+    //create pd/mr/scq/rcq
+    assert(pd = ibv_alloc_pd(rdma_param.contexts[context_index]));
+    assert(mr = ibv_reg_mr(pd, buf, size, flags));
+    assert(send_cq = ibv_create_cq(rdma_param.contexts[context_index], tx_depth, NULL, channel, 0));
+    assert(recv_cq = ibv_create_cq(rdma_param.contexts[context_index], rx_depth, NULL, channel, 0));
+
+    //create qp
+    struct ibv_qp_init_attr attr;
+    memset(&attr, 0, sizeof(struct ibv_qp_init_attr));
+    attr.send_cq = send_cq;
+    attr.recv_cq = recv_cq;
+    attr.cap.max_inline_data = max_inline_size;
+    attr.cap.max_send_wr = tx_depth;
+    attr.cap.max_send_sge = num_sges_per_wr;
+    attr.cap.max_recv_wr = rx_depth;
+    attr.cap.max_recv_sge = num_sges_per_wr;
+    attr.qp_type = IBV_QPT_RAW_PACKET;
+    qp = ibv_create_qp(pd, &attr);
+    if (qp == NULL && errno == ENOMEM) {
+        fprintf(stderr, "Requested QP size might be too big. Try reducing TX depth and/or inline size.\n");
+        fprintf(stderr, "Current TX depth is %d and inline size is %d .\n", tx_depth, max_inline_size);
+    }
+    assert(max_inline_size <= attr.cap.max_inline_data);
+
+    //modify qp to init
+    struct ibv_qp_attr tx_qp_attr;
+    memset(&tx_qp_attr, 0, sizeof(tx_qp_attr));
+    tx_qp_attr.qp_state = IBV_QPS_INIT;
+    tx_qp_attr.port_num = 1;
+    assert(ibv_modify_qp(qp, &tx_qp_attr, IBV_QP_STATE | IBV_QP_PORT) == 0);
+
+    memset(&tx_qp_attr, 0, sizeof(tx_qp_attr));
+    tx_qp_attr.qp_state = IBV_QPS_RTR;
+    assert(ibv_modify_qp(qp, &tx_qp_attr, IBV_QP_STATE) == 0);
+
+    memset(&tx_qp_attr, 0, sizeof(tx_qp_attr));
+    tx_qp_attr.qp_state = IBV_QPS_RTS;
+    assert(ibv_modify_qp(qp, &tx_qp_attr, IBV_QP_STATE) == 0);
+
+
+    handler->buf = reinterpret_cast<size_t> (buf);
+    handler->send_cq = send_cq;
+    handler->recv_cq = recv_cq;
+    handler->max_inline_size = max_inline_size;
+    handler->qp = qp;
+    handler->pd = pd;
+    handler->mr = mr;
+    handler->send_sge_list = send_sge_list;
+    handler->recv_sge_list = recv_sge_list;
+    handler->send_wr = send_wr;
+    handler->send_bar_wr = send_bar_wr;
+    handler->recv_wr = recv_wr;
+    handler->recv_bar_wr = recv_bar_wr;
+    handler->num_sges = num_sges;
+    handler->num_sges_per_wr = num_sges_per_wr;
+    handler->num_wrs = num_wrs;
+    handler->tx_depth = tx_depth;
+    handler->rx_depth = rx_depth;
+
+    return handler;
+}
+
 /**
  * @brief Init send/recv Work Request
  *
