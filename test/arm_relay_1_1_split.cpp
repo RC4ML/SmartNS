@@ -22,22 +22,18 @@ void ctrl_c_handler(int) { stop_flag = true; }
  *
  * @param[in] thread_index NUMA local index that the thread will be bind to
  */
-void sub_task_relay(size_t thread_index, qp_handler *qp_handler_server, qp_handler *qp_handler_client)
+void sub_task_relay_split(size_t thread_index, qp_handler *qp_handler)
 {
     wait_scheduling(FLAGS_numaNode, thread_index);
 
     sleep(2);
 
     size_t send_recv_buf_size = base_alloc_size / 2;
-    offset_handler send_client(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
-    offset_handler send_comp_client(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
-    offset_handler send_server(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
-    offset_handler send_comp_server(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
+    offset_handler send(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
+    offset_handler send_comp(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
 
-    struct ibv_wc *wc_send_client = NULL;
-    struct ibv_wc *wc_send_server = NULL;
-    ALLOCATE(wc_send_client, struct ibv_wc, CTX_POLL_BATCH);
-    ALLOCATE(wc_send_server, struct ibv_wc, CTX_POLL_BATCH);
+    struct ibv_wc *wc_send = NULL;
+    ALLOCATE(wc_send, struct ibv_wc, CTX_POLL_BATCH);
 
     size_t tx_depth = FLAGS_outstanding;
     size_t ops = FLAGS_iterations * (send_recv_buf_size) / FLAGS_payload_size;
@@ -47,10 +43,10 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler_server, qp_handl
     for (size_t i = 0; i < tx_depth; i++)
     {
         // RDMA read from client
-        post_send_batch(*qp_handler_client, 1, send_client, FLAGS_payload_size);
+        post_send_batch(*qp_handler, 1, send, FLAGS_payload_size);
     }
 
-    size_t ne_send_client, ne_send_server;
+    size_t ne_send;
 
     size_t batch_size = FLAGS_batch_size;
     int done = 0;
@@ -61,32 +57,25 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler_server, qp_handl
     clock_gettime(CLOCK_MONOTONIC, &begin_time);
     while (!done && !stop_flag)
     {
-        ne_send_client = poll_send_cq(*qp_handler_client, wc_send_client);
-        for (size_t i = 0; i < ne_send_client; i++)
+        ne_send = poll_send_cq(*qp_handler, wc_send);
+        for (size_t i = 0; i < ne_send; i++)
         {
             // printf("wc status %s\n", ibv_wc_status_str(wc_send_client[i].status));
-            assert(wc_send_client[i].status == IBV_WC_SUCCESS);
+            assert(wc_send[i].status == IBV_WC_SUCCESS);
             // printf("client send comp index %ld\n", send_comp_client.index());
-            send_comp_client.step(1);
+            send_comp.step(1);
             // RDMA write to server
-            post_send_batch(*qp_handler_server, 1, send_server, FLAGS_payload_size);
+            // post_send_batch(*qp_handler, 1, send, FLAGS_payload_size);
         }
 
-        ne_send_server = poll_send_cq(*qp_handler_server, wc_send_server);
-        for (size_t i = 0; i < ne_send_server; i++)
+        if (send.index() < ops && send.index() - send_comp.index() <= tx_depth - batch_size)
         {
-            assert(wc_send_server[i].status == IBV_WC_SUCCESS);
-            // printf("server send comp index %ld\n", send_comp_server.index());
-            send_comp_server.step(1);
+            size_t now_send_num = std::min(ops - send.index(), batch_size);
+            post_send_batch(*qp_handler, now_send_num, send, FLAGS_payload_size);
         }
 
-        if (send_client.index() < ops && send_client.index() - send_comp_client.index() <= tx_depth - batch_size)
-        {
-            size_t now_send_num = std::min(ops - send_client.index(), batch_size);
-            post_send_batch(*qp_handler_client, now_send_num, send_client, FLAGS_payload_size);
-        }
-
-        if (send_client.index() >= ops && send_comp_client.index() >= ops)
+        // if (send_client.index() >= ops && send_comp_client.index() >= ops)
+        if (send.index() >= ops)
         {
             done = 1;
         }
@@ -94,12 +83,12 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler_server, qp_handl
     clock_gettime(CLOCK_MONOTONIC, &end_time);
 
     double duration = (end_time.tv_sec - begin_time.tv_sec) + (end_time.tv_nsec - begin_time.tv_nsec) / 1e9;
-    double speed = 8.0 * send_client.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
+    double speed = 8.0 * send.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
 
     printf("thread [%ld], duration [%f]s, throughput [%f] Gbps\n", thread_index, duration, speed);
+    std::cerr << "thread id: " << std::this_thread::get_id() << std::endl;
 
-    free(wc_send_client);
-    free(wc_send_server);
+    free(wc_send);
     sleep(1);
 }
 
@@ -151,7 +140,7 @@ void benchmark()
     if (FLAGS_is_server)
     {
         tcp_param net_param;
-        net_param.isServer = FLAGS_serverIp.empty();
+        net_param.isServer = true;
         net_param.serverIp = FLAGS_serverIp;
         net_param.sock_port = FLAGS_port;
         socket_init(net_param);
@@ -182,7 +171,7 @@ void benchmark()
     if (!FLAGS_serverIp.empty())
     {
         tcp_param net_param;
-        net_param.isServer = FLAGS_is_server;
+        net_param.isServer = false;
         net_param.serverIp = FLAGS_serverIp;
         net_param.sock_port = FLAGS_port;
         socket_init(net_param);
@@ -236,7 +225,7 @@ void benchmark()
         }
     }
 
-    std::vector<std::thread> threads(FLAGS_threads);
+    std::vector<std::thread> threads;
     for (size_t i = 0; i < FLAGS_threads; i++)
     {
         size_t now_index = i + FLAGS_coreOffset;
@@ -244,23 +233,27 @@ void benchmark()
         {
             if (FLAGS_serverIp.empty())
             {
-                threads[i] = std::thread(sub_task_server, now_index, qp_handlers_server[i]);
+                threads.emplace_back(sub_task_server, now_index, qp_handlers_server[i]);
             }
             else
             {
-                threads[i] = std::thread(sub_task_relay, now_index, qp_handlers_server[i], qp_handlers_client[i]);
+                threads.emplace_back(sub_task_relay_split, now_index, qp_handlers_server[i]);
+		std::cerr << "Server thread id: " << threads.back().get_id() << std::endl;
+                bind_to_core(threads.back(), FLAGS_numaNode, now_index);
+                threads.emplace_back(sub_task_relay_split, now_index, qp_handlers_client[i]);
+		std::cerr << "Client thread id: " << threads.back().get_id() << std::endl;
             }
         }
         else
         {
-            threads[i] = std::thread(sub_task_client, now_index, qp_handlers_client[i]);
+            threads.emplace_back(sub_task_client, now_index, qp_handlers_client[i]);
         }
-        bind_to_core(threads[i], FLAGS_numaNode, now_index);
+        bind_to_core(threads.back(), FLAGS_numaNode, now_index);
     }
 
-    for (size_t i = 0; i < FLAGS_threads; i++)
+    for (auto &t : threads)
     {
-        threads[i].join();
+        t.join();
     }
 
     // for (size_t i = 0;i < FLAGS_threads;i++) {
