@@ -1,6 +1,6 @@
-// Client: sudo ./arm_relay_1_1 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 1 -payload_size 1024 -serverIp 10.0.0.101
-// Relay:  sudo ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 1 -payload_size 1024
-// Server: sudo ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 1 -payload_size 1024
+// Client: sudo ./arm_relay_1_1 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 2 -payload_size 1024 -serverIp 10.0.0.101
+// Relay:  sudo ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 2 -payload_size 1024
+// Server: sudo ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 2 -payload_size 1024
 
 #include "smartns_dv.h"
 #include "rdma_cm/libsmartns.h"
@@ -12,11 +12,11 @@
 
 std::atomic<bool> stop_flag = false;
 std::mutex IO_LOCK;
-static uint64_t NB_RXD = 1024;
-static uint64_t NB_TXD = 1024;
+static uint64_t NB_RXD = 2048;
+static uint64_t NB_TXD = 2048;
 static uint64_t PKT_BUF_SIZE = 8448;
-static uint64_t PKT_HANDLE_BATCH = 4;
-static uint64_t PKT_SEND_OUTSTANDING = 64;
+static uint64_t PKT_HANDLE_BATCH = 2;
+static uint64_t PKT_SEND_OUTSTANDING = 128;
 
 static uint64_t BUF_SIZE = (NB_TXD + NB_RXD) * PKT_BUF_SIZE;
 

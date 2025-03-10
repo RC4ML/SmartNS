@@ -1,6 +1,6 @@
-// Client: sudo ./arm_relay_1_3 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 1 -payload_size 1024 -serverIp 10.0.0.101
-// Relay:  sudo ./arm_relay_1_3 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 1 -payload_size 1024
-// Server: sudo ./arm_relay_1_3 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 1 -payload_size 1024
+// Client: sudo ./arm_relay_1_3 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 2 -payload_size 1024 -serverIp 10.0.0.101
+// Relay:  sudo ./arm_relay_1_3 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 2 -payload_size 1024
+// Server: sudo ./arm_relay_1_3 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 2 -payload_size 1024
 
 #include "smartns_dv.h"
 #include "rdma_cm/libsmartns.h"
@@ -47,7 +47,7 @@ void init_raw_packet_handler(qp_handler *handler, size_t thread_index) {
     for (int i = 0;i < handler->num_wrs;i++) {
         handler->send_sge_list[i * handler->num_sges_per_wr].lkey = local_rkey;
         handler->send_wr[i].sg_list = handler->send_sge_list + i * handler->num_sges_per_wr;
-        handler->send_wr[i].num_sge = 1;
+        handler->send_wr[i].num_sge = handler->num_sges_per_wr;
         if (i != 0) {
             handler->send_wr[i - 1].next = handler->send_wr + i;
         }
