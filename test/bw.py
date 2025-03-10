@@ -7,7 +7,7 @@ def read_hex_value(filename):
 def calculate_hex_diff(old_value, new_value, max_value=0xFFFFFFFF):
     if new_value < old_value:  # Handle overflow
         new_value += max_value + 1
-    return (new_value - old_value) * 64 * 8 / (1024 * 1024 * 1024)  # Convert to Gbps
+    return (new_value - old_value) * 64 / (1024 * 1024 * 1024)  # Convert to GB/s
 
 def print_table(seconds, cache_bw, memory_bw):
     print(f"{seconds:<10} {cache_bw:<20} {memory_bw:<20}")
@@ -34,7 +34,7 @@ seconds = 0
 # print start time utc
 print(time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
 # Print table header
-print_table("second(s)", "cache bw (Gbps)", "memory bw (Gbps)")
+print_table("second(s)", "cache bw (GB/s)", "memory bw (GB/s)")
 
 while True:
     diff_cache_read_all = [0] * 8

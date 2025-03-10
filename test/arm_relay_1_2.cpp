@@ -1,6 +1,6 @@
-// Client: ./arm_relay_1_2 -deviceName mlx5_0 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -serverIp 10.0.0.101
-// Relay:  ./arm_relay_1_2 -deviceName mlx5_2 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -is_server -serverIp 10.0.0.201
-// Server: ./arm_relay_1_2 -deviceName mlx5_2 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -is_server
+// Client: sudo ./arm_relay_1_2 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 1 -payload_size 1024 -serverIp 10.0.0.101
+// Relay:  sudo ./arm_relay_1_2 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 1 -payload_size 1024
+// Server: sudo ./arm_relay_1_2 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 1 -payload_size 1024
 
 #include "smartns_dv.h"
 #include "rdma_cm/libsmartns.h"
@@ -9,20 +9,77 @@
 #include "hdr_histogram.h"
 #include "numautil.h"
 #include "devx/devx_device.h"
+#include "raw_packet/raw_packet.h"
 
 std::atomic<bool> stop_flag = false;
-size_t base_alloc_size = 16 * 1024 * 1024;
-/**
- * 本程序的数据量：
- *
- * - base_alloc_size: 16MB，`buf` 为每个线程分配一个 16MB 的缓冲区
- * - send_recv_buf_size: 8MB，
- * - FLAGS_batch_size: 用户指定
- * - FLAGS_payload_size: 用户给定，在 post_send* 中给到 ibv_sge.length
- *
- */
+std::mutex IO_LOCK;
+static uint64_t NB_RXD = 1024;
+static uint64_t NB_TXD = 1024;
+static uint64_t PKT_BUF_SIZE = 8448;
+static uint64_t PKT_HANDLE_BATCH = 8;
+static uint64_t PKT_SEND_OUTSTANDING = 128;
+
+static uint64_t BUF_SIZE = (NB_TXD + NB_RXD) * PKT_BUF_SIZE;
+
+static uint64_t FLOW_UDP_DST_PORT = 6666;
+
+DEFINE_int32(nodeType, 100, "0: client, 1: relay, 2: server");
+enum NodeType {
+    CLIENT = 0,
+    RELAY = 1,
+    SERVER = 2,
+};
+
+// TODO check
+// bf1 enp3s0f0s0
+unsigned char SERVER_MAC_ADDR[6] = { 0x02,0x15,0x9e,0x7c,0x4d,0xad };
+// bf2 enp3s0f0s0
+unsigned char CLIENT_MAC_ADDR[6] = { 0x02,0xbd,0xe9,0x97,0x48,0xd3 };
 
 void ctrl_c_handler(int) { stop_flag = true; }
+
+void init_raw_packet_handler(qp_handler *handler, size_t thread_index) {
+    size_t local_mr_addr = reinterpret_cast<size_t>(handler->buf);
+    size_t local_rkey = handler->mr->lkey;
+
+    size_t tx_depth = handler->tx_depth;
+
+    for (int i = 0;i < handler->num_wrs;i++) {
+        handler->send_sge_list[i].lkey = local_rkey;
+        handler->send_wr[i].sg_list = handler->send_sge_list + i;
+        handler->send_wr[i].num_sge = 1;
+        if (i != 0) {
+            handler->send_wr[i - 1].next = handler->send_wr + i;
+        }
+        handler->send_wr[i].next = nullptr;
+        handler->send_wr[i].send_flags = IBV_SEND_IP_CSUM;
+        handler->send_wr[i].opcode = IBV_WR_SEND;
+    }
+
+    for (size_t i = 0;i < tx_depth;i++) {
+        udp_packet *now_pkt = reinterpret_cast<udp_packet *>(local_mr_addr + PKT_BUF_SIZE * i);
+        now_pkt->eth_hdr.ether_type = htons(0x0800);
+        for (size_t j = 0;j < 6;j++) {
+            now_pkt->eth_hdr.dst_addr.addr_bytes[j] = SERVER_MAC_ADDR[j];
+            now_pkt->eth_hdr.src_addr.addr_bytes[j] = CLIENT_MAC_ADDR[j];
+        }
+
+        now_pkt->ip_hdr.version_ihl = 0x45;
+        now_pkt->ip_hdr.type_of_service = 0;
+        now_pkt->ip_hdr.total_length = htons(FLAGS_payload_size - sizeof(ether_hdr));
+        now_pkt->ip_hdr.packet_id = htons(0);
+        now_pkt->ip_hdr.fragment_offset = htons(0);
+        now_pkt->ip_hdr.time_to_live = 64;
+        now_pkt->ip_hdr.next_proto_id = 17;
+        now_pkt->ip_hdr.src_addr = 0;
+        now_pkt->ip_hdr.dst_addr = 0;
+
+        now_pkt->udp_hdr.dgram_len = htons(FLAGS_payload_size - sizeof(ether_hdr) - sizeof(ipv4_hdr));
+        now_pkt->udp_hdr.src_port = FLOW_UDP_DST_PORT;
+        now_pkt->udp_hdr.dst_port = htons(FLOW_UDP_DST_PORT + thread_index);
+    }
+
+}
 
 /**
  * @brief Relay 任务
@@ -31,69 +88,53 @@ void ctrl_c_handler(int) { stop_flag = true; }
  *
  * @param[in] thread_index NUMA local index that the thread will be bind to
  */
-void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *resource, void **bufs)
-{
+void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *resource, void **bufs) {
     wait_scheduling(FLAGS_numaNode, thread_index);
 
-    sleep(2);
+    sleep(1);
+    struct ibv_wc *wc_send = NULL;
+    ALLOCATE(wc_send, struct ibv_wc, CTX_POLL_BATCH);
 
-    size_t send_recv_buf_size = base_alloc_size / 2;
-    offset_handler send_client(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
-    offset_handler send_comp_client(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
-    offset_handler send_server(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
-    offset_handler send_comp_server(send_recv_buf_size / FLAGS_payload_size, FLAGS_payload_size, 0);
+    offset_handler send_client(NB_TXD, PKT_BUF_SIZE, 64);
+    offset_handler send_client_comp(NB_TXD, PKT_BUF_SIZE, 64);
+    offset_handler send_server(NB_TXD, PKT_BUF_SIZE, 0);
+    offset_handler send_server_comp(NB_TXD, PKT_BUF_SIZE, 0);
+
 
     size_t tx_depth = FLAGS_outstanding;
-    size_t ops = FLAGS_iterations * (send_recv_buf_size) / FLAGS_payload_size;
+    size_t ops = FLAGS_iterations * (BUF_SIZE) / PKT_BUF_SIZE;
     ops = round_up(ops, FLAGS_batch_size);
     ops = round_up(ops, SEND_CQ_BATCH);
 
     /**
      * DMA 准备
      */
-    // MR
+     // MR
     void *local_buffer = bufs[thread_index];
     assert(local_buffer != nullptr);
-    ibv_mr *local_mr = ibv_reg_mr(resource->pd, local_buffer, base_alloc_size,
-                                  IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_HUGETLB | IBV_ACCESS_RELAXED_ORDERING);
-    if (!local_mr)
-    {
-        fprintf(stderr, "can't create local_mr\n");
-        exit(__LINE__);
-    }
+
     // CQ
     ibv_cq *sq_cq = create_dma_cq(resource->pd->context, tx_depth);
-    ibv_cq *rq_cq = create_dma_cq(resource->pd->context, tx_depth);
     // QP
-    ibv_qp *qp = create_dma_qp(resource->pd->context, resource->pd, rq_cq, sq_cq, FLAGS_outstanding);
+    ibv_qp *qp = create_dma_qp(resource->pd->context, resource->pd, sq_cq, sq_cq, FLAGS_outstanding * 2);
     init_dma_qp(qp);
     dma_qp_self_connected(qp);
     ibv_qp_ex *dma_qpx = ibv_qp_to_qp_ex(qp);
     mlx5dv_qp_ex *dma_mqpx = mlx5dv_qp_ex_from_ibv_qp_ex(dma_qpx);
     dma_mqpx->wr_memcpy_direct_init(dma_mqpx);
     // mkey
-    uint32_t local_mr_mkey = local_mr->lkey;
+    uint32_t local_mr_mkey = handler->mr->lkey;
     uint32_t remote_mr_mkey = devx_mr_query_mkey(resource->mr);
-    uint64_t dma_start_index = 0, dma_finish_index = 0;
-
-    /**
-     * @brief RDMA WC 准备
-     *
-     */
-    struct ibv_wc *wc_send_client = NULL;
-    struct ibv_wc *wc_send_server = NULL;
-    ALLOCATE(wc_send_client, struct ibv_wc, CTX_POLL_BATCH);
-    ALLOCATE(wc_send_server, struct ibv_wc, CTX_POLL_BATCH);
 
     /**
      * DMA 发送
      */
-    for (size_t i = 0; i < tx_depth; i++)
-    {
-        dma_qpx->wr_id = dma_start_index;
+    for (size_t i = 0; i < tx_depth; i++) {
+        dma_qpx->wr_id = send_client.index();
         dma_qpx->wr_flags = IBV_SEND_SIGNALED;
         // DMA Read
-        dma_mqpx->wr_memcpy_direct(dma_mqpx, local_mr_mkey, (uint64_t)local_buffer + send_client.offset(), remote_mr_mkey, (uint64_t)resource->addr + send_client.offset(), FLAGS_payload_size);
+        dma_mqpx->wr_memcpy_direct(dma_mqpx, local_mr_mkey, (uint64_t)local_buffer + send_client.offset(),
+            remote_mr_mkey, (uint64_t)resource->addr + send_client.offset(), FLAGS_payload_size - 64);
         send_client.step(1);
     }
 
@@ -107,87 +148,52 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
     begin_time.tv_sec = 0;
 
     clock_gettime(CLOCK_MONOTONIC, &begin_time);
-    struct timespec last_print_time = begin_time;
-    size_t last_client_index = 0;
-    while (!done && !stop_flag)
-    {
+    while (!done && !stop_flag) {
         // DMA 轮询
-        ne_send_client = ibv_poll_cq(sq_cq, CTX_POLL_BATCH, wc_send_client);
-        for (size_t i = 0; i < ne_send_client; i++)
-        {
-            assert(wc_send_client[i].status == IBV_WC_SUCCESS);
+        ne_send_client = ibv_poll_cq(sq_cq, CTX_POLL_BATCH, wc_send);
+        for (size_t i = 0; i < ne_send_client; i++) {
+            assert(wc_send[i].status == IBV_WC_SUCCESS);
             // printf("Client: %6ld Poll CQ\n", send_comp_client.index());
-            send_comp_client.step(1);
+            send_client_comp.step(1);
         }
 
-        // DMA 发送
-        auto outstanding_num = send_client.index() - send_comp_client.index();
-        auto now_send_num = tx_depth - outstanding_num;
-        if (send_client.index() < ops && now_send_num > 0)
-        {
-            for (size_t i = 0; i < now_send_num; i++)
-            {
-                // printf("Client: %6ld Post WR\n", send_client.index());
-                dma_qpx->wr_id = dma_start_index;
+        ne_send_server = poll_send_cq(*handler, wc_send);
+        for (size_t i = 0; i < ne_send_server; i++) {
+            assert(wc_send[i].status == IBV_WC_SUCCESS);
+            // printf("server send comp index %ld\n", send_comp_server.index());
+            send_server_comp.step(PKT_HANDLE_BATCH);
+        }
+
+        if (send_client.index() < ops && send_server.index() - send_server_comp.index() <= PKT_HANDLE_BATCH && send_client.index() - send_client_comp.index() <= tx_depth - FLAGS_batch_size) {
+            size_t now_send_num = std::min(ops - send_client.index(), batch_size);
+            for (size_t i = 0; i < now_send_num; i++) {
+                dma_qpx->wr_id = send_client.index();
                 dma_qpx->wr_flags = IBV_SEND_SIGNALED;
                 // DMA Read
-                dma_mqpx->wr_memcpy_direct(dma_mqpx, local_mr_mkey, (uint64_t)local_buffer + send_client.offset(), remote_mr_mkey, (uint64_t)resource->addr + send_client.offset(), FLAGS_payload_size);
+                dma_mqpx->wr_memcpy_direct(dma_mqpx, local_mr_mkey, (uint64_t)local_buffer + send_client.offset(),
+                    remote_mr_mkey, (uint64_t)resource->addr + send_client.offset(), FLAGS_payload_size - 64);
                 send_client.step(1);
             }
         }
 
-        // RDMA 轮询
-        ne_send_server = poll_send_cq(*qp_handler, wc_send_server);
-        for (size_t i = 0; i < ne_send_server; i++)
-        {
-            assert(wc_send_server[i].status == IBV_WC_SUCCESS);
-            // printf("Server: %6ld Poll CQ\n", send_comp_server.index());
-            send_comp_server.step(1);
-        }
-
-        // RDMA 发送
-        // 未发送完，且
-        // 当前发送的 index 小于 DMA 完成的 index 且
-        // 正在传输的（outstanding）小于 tx_depth - batch_size
-        outstanding_num = send_server.index() - send_comp_server.index();
-        now_send_num = std::min(tx_depth - outstanding_num, send_comp_client.index() - send_server.index());
-        if (send_server.index() < ops && now_send_num > 0)
-        {
-            for (size_t i = 0; i < now_send_num; i++)
-            {
-                // printf("Server: %6ld Post WR\n", send_server.index());
-                // RDMA write to server
-                post_send_batch(*qp_handler, 1, send_server, FLAGS_payload_size);
-                // post_send_batch will step handler
-                // send_server.step(1);
+        if (send_client_comp.index() - send_server.index() >= PKT_HANDLE_BATCH) {
+            for (size_t i = 0;i < PKT_HANDLE_BATCH;i++) {
+                handler->send_sge_list[i].addr = send_server.offset() + reinterpret_cast<size_t>(handler->buf);
+                handler->send_sge_list[i].length = FLAGS_payload_size;
+                handler->send_wr[i].wr_id = send_server.index();
+                if (i == PKT_HANDLE_BATCH - 1) {
+                    handler->send_wr[i].next = nullptr;
+                    handler->send_wr[i].send_flags |= IBV_SEND_SIGNALED;
+                }
+                send_server.step();
             }
+            assert(ibv_post_send(handler->qp, handler->send_wr, &handler->send_bar_wr) == 0);
         }
 
-        // 结束条件
-        if (send_client.index() >= ops && send_comp_client.index() >= ops && send_server.index() >= ops && send_comp_server.index() >= ops)
-        {
+        if (send_client_comp.index() >= ops) {
             done = 1;
         }
 
-        // Print throughput statistics every second
-        struct timespec current_time;
-        clock_gettime(CLOCK_MONOTONIC, &current_time);
-        double elapsed_since_print = (current_time.tv_sec - last_print_time.tv_sec) + 
-                                    (current_time.tv_nsec - last_print_time.tv_nsec) / 1e9;
-
-        if (elapsed_since_print >= 1.0) {  // Print every second
-            double instant_speed = 8.0 * (send_client.index() - last_client_index) * 
-                                  FLAGS_payload_size / elapsed_since_print / 1000 / 1000 / 1000;
-            
-            double elasped_since_begin = (current_time.tv_sec - begin_time.tv_sec) + 
-                                        (current_time.tv_nsec - begin_time.tv_nsec) / 1e9;
-            
-            printf("%ld\t%f\t%f\n", thread_index, elasped_since_begin, instant_speed);
-            
-            // Update tracking variables
-            last_print_time = current_time;
-            last_client_index = send_client.index();
-        }
     }
     clock_gettime(CLOCK_MONOTONIC, &end_time);
 
@@ -196,9 +202,7 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
 
     printf("thread [%ld], duration [%f]s, throughput [%f] Gbps\n", thread_index, duration, speed);
 
-    free(wc_send_client);
-    free(wc_send_server);
-    sleep(1);
+    free(wc_send);
 }
 
 /**
@@ -209,12 +213,10 @@ void sub_task_relay(size_t thread_index, qp_handler *qp_handler, vhca_resource *
  * @param[in] thread_index 线程绑定的 NUMA 本地索引
  * @param[in] resource VHCA 资源
  */
-void sub_task_client(size_t thread_index, vhca_resource *resource)
-{
+void sub_task_client(size_t thread_index, vhca_resource *resource) {
     wait_scheduling(FLAGS_numaNode, thread_index);
 
-    while (!stop_flag)
-    {
+    while (!stop_flag) {
         sleep(1);
     }
 }
@@ -224,14 +226,77 @@ void sub_task_client(size_t thread_index, vhca_resource *resource)
  *
  * - Do nothing
  */
-void sub_task_server(size_t thread_index, qp_handler *qp_handler)
-{
+void sub_task_server(size_t thread_index, qp_handler *handler) {
     wait_scheduling(FLAGS_numaNode, thread_index);
 
-    while (!stop_flag)
-    {
-        sleep(1);
+    struct ibv_wc *wc_recv = NULL;
+    ALLOCATE(wc_recv, struct ibv_wc, CTX_POLL_BATCH);
+
+    size_t local_mr_addr = reinterpret_cast<size_t>(handler->buf);
+    size_t local_rkey = handler->mr->lkey;
+    offset_handler recv(NB_RXD, PKT_BUF_SIZE, NB_TXD * PKT_BUF_SIZE);
+    offset_handler recv_comp(NB_RXD, PKT_BUF_SIZE, NB_TXD * PKT_BUF_SIZE);
+
+    size_t rx_depth = handler->rx_depth;
+
+    for (size_t i = 0;i < rx_depth; i++) {
+        handler->recv_sge_list[0].addr = recv.offset() + local_mr_addr;
+        handler->recv_sge_list[0].length = PKT_BUF_SIZE;
+        handler->recv_sge_list[0].lkey = local_rkey;
+        handler->recv_wr->num_sge = 1;
+        handler->recv_wr->sg_list = handler->recv_sge_list;
+        handler->recv_wr->wr_id = recv.offset() + local_mr_addr;
+        handler->recv_wr->next = nullptr;
+
+        assert(ibv_post_recv(handler->qp, handler->recv_wr, &handler->recv_bar_wr) == 0);
+        recv.step();
     }
+
+    for (int i = 0;i < handler->num_wrs;i++) {
+        handler->recv_sge_list[i].lkey = local_rkey;
+        handler->recv_wr[i].sg_list = handler->recv_sge_list + i;
+        handler->recv_wr[i].num_sge = 1;
+        if (i != 0) {
+            handler->recv_wr[i - 1].next = handler->recv_wr + i;
+        }
+        handler->recv_wr[i].next = nullptr;
+    }
+
+    struct timespec begin_time, end_time;
+    begin_time.tv_nsec = 0;
+    begin_time.tv_sec = 0;
+
+    while (!stop_flag) {
+        if ((recv.index() - recv_comp.index()) < (rx_depth - PKT_HANDLE_BATCH)) {
+            for (size_t i = 0;i < PKT_HANDLE_BATCH;i++) {
+                handler->recv_sge_list[i].addr = recv.offset() + local_mr_addr;
+                handler->recv_sge_list[i].length = PKT_BUF_SIZE;
+                handler->recv_wr[i].wr_id = recv.offset() + local_mr_addr;
+                if (i == PKT_HANDLE_BATCH - 1) {
+                    handler->recv_wr[i].next = nullptr;
+                }
+                recv.step();
+            }
+            assert(ibv_post_recv(handler->qp, handler->recv_wr, &handler->recv_bar_wr) == 0);
+        }
+        int ne_recv = ibv_poll_cq(handler->recv_cq, CTX_POLL_BATCH, wc_recv);
+        if (ne_recv != 0 && begin_time.tv_sec == 0) {
+            clock_gettime(CLOCK_MONOTONIC, &begin_time);
+        }
+        for (int i = 0;i < ne_recv;i++) {
+            assert(wc_recv[i].status == IBV_WC_SUCCESS);
+            assert(wc_recv[i].byte_len == static_cast<uint32_t>(FLAGS_payload_size));
+            recv_comp.step();
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+
+    double duration = (end_time.tv_sec - begin_time.tv_sec) + (end_time.tv_nsec - begin_time.tv_nsec) / 1e9;
+    double recv_speed = 8.0 * recv_comp.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
+    std::lock_guard<std::mutex> lock(IO_LOCK);
+    printf("thread [%ld], duration [%f]s, recv speed [%f] Gbps", thread_index, duration, recv_speed);
+
+    free(wc_recv);
 }
 
 /**
@@ -247,11 +312,9 @@ void sub_task_server(size_t thread_index, qp_handler *qp_handler)
  * @param[in] bufs 缓冲区
  * @param[out] vhca_resource VHCA 资源
  */
-void host_dma_copy_export(rdma_param &rdma_param, size_t threads, void **bufs, vhca_resource *resources)
-{
+void host_dma_copy_export(rdma_param &rdma_param, size_t threads, void **bufs, vhca_resource *resources) {
     struct devx_hca_capabilities caps;
-    if (devx_query_hca_caps(rdma_param.contexts[0], &caps) != 0)
-    {
+    if (devx_query_hca_caps(rdma_param.contexts[0], &caps) != 0) {
         throw std::runtime_error("can't query_hca_caps");
     }
 
@@ -265,30 +328,25 @@ void host_dma_copy_export(rdma_param &rdma_param, size_t threads, void **bufs, v
     printf("cross_gvmi_mkey_enabled %d\n", caps.cross_gvmi_mkey_enabled);
     printf("---------------------------\n");
 
-    for (size_t i = 0; i < threads; i++)
-    {
+    for (size_t i = 0; i < threads; i++) {
         resources[i].pd = ibv_alloc_pd(rdma_param.contexts[i]);
     }
 
-    uint8_t access_key[32] = {0};
-    for (size_t i = 0; i < 32; i++)
-    {
+    uint8_t access_key[32] = { 0 };
+    for (size_t i = 0; i < 32; i++) {
         access_key[i] = 1;
     }
 
-    for (size_t i = 0; i < threads; i++)
-    {
+    for (size_t i = 0; i < threads; i++) {
         resources[i].vhca_id = caps.vhca_id;
         resources[i].addr = bufs[i];
-        resources[i].size = base_alloc_size;
+        resources[i].size = BUF_SIZE;
         resources[i].mr = devx_reg_mr(resources[i].pd, resources[i].addr, resources[i].size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
-        if (!resources[i].mr)
-        {
+        if (!resources[i].mr) {
             throw std::runtime_error("can't devx_reg_mr");
         }
         resources[i].mkey = devx_mr_query_mkey(resources[i].mr);
-        if (devx_mr_allow_other_vhca_access(resources[i].mr, access_key, sizeof(access_key)) != 0)
-        {
+        if (devx_mr_allow_other_vhca_access(resources[i].mr, access_key, sizeof(access_key)) != 0) {
             throw std::runtime_error("can't allow_other_vhca_access");
         }
         printf("mr (umem): thread %ld vhca_id %u addr %p mkey %u\n", i, caps.vhca_id, resources[i].addr, resources[i].mkey);
@@ -306,31 +364,26 @@ void host_dma_copy_export(rdma_param &rdma_param, size_t threads, void **bufs, v
  * @param[in] threads 线程数
  * @param[out] resources VHCA 资源
  */
-void dpu_dma_copy_check(rdma_param &rdma_param, size_t threads, void **bufs, vhca_resource *resources)
-{
+void dpu_dma_copy_check(rdma_param &rdma_param, qp_handler **handlers, size_t threads, void **bufs, vhca_resource *resources) {
     uint32_t mmo_dma_max_length = get_mmo_dma_max_length(rdma_param.contexts[0]);
     fprintf(stderr, "mmo_dma_max_length %u\n", mmo_dma_max_length);
     rt_assert(mmo_dma_max_length >= static_cast<uint32_t>(FLAGS_payload_size));
 
     rt_assert(FLAGS_outstanding >= static_cast<uint32_t>(FLAGS_batch_size));
     rt_assert(1ul * FLAGS_batch_size * FLAGS_payload_size <= resources[0].size);
-    uint8_t access_key[32] = {0};
-    for (int i = 0; i < 32; i++)
-    {
+    uint8_t access_key[32] = { 0 };
+    for (int i = 0; i < 32; i++) {
         access_key[i] = 1;
     }
 
-    for (size_t i = 0; i < threads; i++)
-    {
-        resources[i].pd = ibv_alloc_pd(rdma_param.contexts[i]);
-        if (resources[i].pd == nullptr)
-        {
+    for (size_t i = 0; i < threads; i++) {
+        resources[i].pd = handlers[i]->pd;
+        if (resources[i].pd == nullptr) {
             fprintf(stderr, "ibv_alloc_pd failed\n");
             throw std::runtime_error("ibv_alloc_pd failed");
         }
         resources[i].mr = devx_create_crossing_mr(resources[i].pd, resources[i].addr, resources[i].size, resources[i].vhca_id, resources[i].mkey, access_key, sizeof(access_key));
-        if (resources[i].mr == nullptr)
-        {
+        if (resources[i].mr == nullptr) {
             fprintf(stderr, "devx_create_crossing_mr failed\n");
             throw std::runtime_error("devx_create_crossing_mr failed");
         }
@@ -346,10 +399,8 @@ void dpu_dma_copy_check(rdma_param &rdma_param, size_t threads, void **bufs, vhc
  * @param[in] rdma_param RDMA 参数
  *
  */
-vhca_resource *connect_peer_dma_client(tcp_param &net_param, rdma_param &rdma_param, void **bufs)
-{
+vhca_resource *connect_peer_dma_client(tcp_param &net_param, rdma_param &rdma_param, void **bufs) {
     vhca_resource *resources = new vhca_resource[FLAGS_threads];
-    roce_init(rdma_param, FLAGS_threads);
     socket_init(net_param);
 
     host_dma_copy_export(rdma_param, FLAGS_threads, bufs, resources);
@@ -358,173 +409,123 @@ vhca_resource *connect_peer_dma_client(tcp_param &net_param, rdma_param &rdma_pa
     return resources;
 }
 
-vhca_resource *connect_peer_dma_relay(tcp_param &net_param, rdma_param &rdma_param, void **bufs)
-{
+vhca_resource *connect_peer_dma_relay(tcp_param &net_param, rdma_param &rdma_param, qp_handler **handlers, void **bufs) {
     vhca_resource *resources = new vhca_resource[FLAGS_threads];
-    roce_init(rdma_param, FLAGS_threads);
     socket_init(net_param);
 
     read(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource) * FLAGS_threads);
-    dpu_dma_copy_check(rdma_param, FLAGS_threads, bufs, resources);
+    dpu_dma_copy_check(rdma_param, handlers, FLAGS_threads, bufs, resources);
 
     return resources;
 }
 
-/**
- * @brief 两个 RDMA 之间交换信息
- *
- * 初始化 RDMA 资源，创建 QP，并交换信息。
- *
- * @param[in] net_param 网络参数
- * @param[in] bufs 缓冲区
- * @param[in] rdma_param RDMA 参数
- * @return qp_handler** 创建的 QP 处理器数组
- */
-qp_handler **connect_peer_rdma(tcp_param &net_param, void **bufs, rdma_param &rdma_param)
-{
-    roce_init(rdma_param, FLAGS_threads);
+void benchmark() {
+    qp_handler **qp_handlers_server = nullptr;
+    ibv_flow **main_flow = nullptr;
+    vhca_resource *resources = nullptr;
 
-    pingpong_info *info = new pingpong_info[2 * FLAGS_threads]();
-    qp_handler **qp_handlers = new qp_handler *[FLAGS_threads];
-    for (size_t i = 0; i < FLAGS_threads; i++)
-    {
-        qp_handlers[i] = create_qp_rc(rdma_param, bufs[i], base_alloc_size, info + i, i);
-    }
-    exchange_data(net_param, reinterpret_cast<char *>(info), reinterpret_cast<char *>(info) + sizeof(pingpong_info) * FLAGS_threads, sizeof(pingpong_info) * FLAGS_threads);
-
-    for (size_t i = 0; i < FLAGS_threads; i++)
-    {
-        connect_qp_rc(rdma_param, *qp_handlers[i], info + i + FLAGS_threads, info + i);
-        init_wr_base_write(*qp_handlers[i]);
-    }
-
-    delete[] info;
-
-    return qp_handlers;
-}
-
-void benchmark()
-{
     void **bufs = new void *[FLAGS_threads];
-    for (size_t i = 0; i < FLAGS_threads; i++)
-    {
-        bufs[i] = get_huge_mem(FLAGS_numaNode, base_alloc_size);
-        for (size_t j = 0; j < base_alloc_size / (sizeof(int)); j++)
-        {
-            (reinterpret_cast<int **>(bufs))[i][j] = 0;
+    for (size_t i = 0; i < FLAGS_threads; i++) {
+        bufs[i] = get_huge_mem(FLAGS_numaNode, BUF_SIZE);
+        for (size_t j = 0; j < BUF_SIZE / (sizeof(int)); j++) {
+            (reinterpret_cast<int **>(bufs))[i][j] = j;
         }
     }
+
+    rdma_param rdma_param;
+    rdma_param.device_name = FLAGS_deviceName;
+    rdma_param.numa_node = FLAGS_numaNode;
+    rdma_param.batch_size = std::max(FLAGS_batch_size, PKT_HANDLE_BATCH);
+    rdma_param.sge_per_wr = 1;
+    roce_init(rdma_param, FLAGS_threads);
 
     tcp_param net_param;
     net_param.serverIp = FLAGS_serverIp;
     net_param.sock_port = FLAGS_port;
-    /**
-     * Relay 和 Server 之间建立 RDMA 连接：
-     */
-    rdma_param rdma_param_rdma;
-    rdma_param_rdma.device_name = FLAGS_deviceName;
-    rdma_param_rdma.numa_node = FLAGS_numaNode;
-    rdma_param_rdma.batch_size = FLAGS_batch_size;
-    rdma_param_rdma.sge_per_wr = 1;
-    qp_handler **qp_handlers = nullptr;
-    if (FLAGS_is_server) // Relay or Server
-    {
-        net_param.isServer = FLAGS_serverIp.empty();
-        socket_init(net_param);
-        qp_handlers = connect_peer_rdma(net_param, bufs, rdma_param_rdma);
-        if (qp_handlers == nullptr)
-        {
-            throw std::runtime_error("qp_handlers is nullptr");
+
+    if (FLAGS_nodeType == RELAY || FLAGS_nodeType == SERVER) {
+        qp_handlers_server = new qp_handler * [FLAGS_threads];
+        for (size_t i = 0;i < FLAGS_threads;i++) {
+            qp_handlers_server[i] = create_qp_raw_packet(rdma_param, bufs[i], BUF_SIZE, NB_TXD, NB_RXD, i);
         }
-        socket_close(net_param);
+
+        main_flow = new ibv_flow * [FLAGS_threads];
+
+        size_t flow_attr_total_size = sizeof(ibv_flow_attr) + sizeof(ibv_flow_spec_eth) + sizeof(ibv_flow_spec_tcp_udp);
+
+        void *header_buff = malloc(flow_attr_total_size);
+        memset(header_buff, 0, flow_attr_total_size);
+        ibv_flow_attr *flow_attr = reinterpret_cast<ibv_flow_attr *>(header_buff);
+        ibv_flow_spec_eth *flow_spec_eth = reinterpret_cast<ibv_flow_spec_eth *>(flow_attr + 1);
+        ibv_flow_spec_tcp_udp *flow_spec_udp = reinterpret_cast<ibv_flow_spec_tcp_udp *>(flow_spec_eth + 1);
+        flow_attr->size = flow_attr_total_size;
+        flow_attr->priority = 0;
+        flow_attr->num_of_specs = 2;
+        flow_attr->port = 1;
+        flow_attr->flags = 0;
+        flow_attr->type = IBV_FLOW_ATTR_NORMAL;
+
+        flow_spec_eth->type = IBV_FLOW_SPEC_ETH;
+        flow_spec_eth->size = sizeof(ibv_flow_spec_eth);
+        flow_spec_eth->val.ether_type = htons(0x0800);
+        flow_spec_eth->mask.ether_type = 0xffff;
+        if (FLAGS_nodeType == SERVER) {
+            memcpy(flow_spec_eth->val.dst_mac, SERVER_MAC_ADDR, 6);
+        } else {
+            memcpy(flow_spec_eth->val.dst_mac, CLIENT_MAC_ADDR, 6);
+        }
+        memset(flow_spec_eth->mask.dst_mac, 0xFF, 6);
+
+        for (size_t i = 0;i < FLAGS_threads;i++) {
+            flow_spec_udp->type = IBV_FLOW_SPEC_UDP;
+            flow_spec_udp->size = sizeof(ibv_flow_spec_tcp_udp);
+            flow_spec_udp->val.dst_port = htons(FLOW_UDP_DST_PORT + i);
+            flow_spec_udp->mask.dst_port = 0xFFFF;
+            // flow_spec_udp->val.src_port = htons(SMARTNS_UDP_MAGIC_PORT + i);
+            // flow_spec_udp->mask.src_port = 0xFFFF;
+            ibv_flow *flow = ibv_create_flow(qp_handlers_server[i]->qp, flow_attr);
+            assert(flow);
+            main_flow[i] = flow;
+        }
+
+        free(header_buff);
     }
-    /**
-     * Relay 和 Client 之间建立 DMA 连接：
-     *
-     */
-    rdma_param rdma_param_dma;
-    rdma_param_dma.device_name = FLAGS_deviceName;
-    rdma_param_dma.numa_node = FLAGS_numaNode;
-    rdma_param_dma.batch_size = FLAGS_batch_size;
-    rdma_param_dma.sge_per_wr = 1;
-    vhca_resource *resources = nullptr;
-    if (!FLAGS_is_server) // client
+
+    if (FLAGS_nodeType == CLIENT) // client
     {
         net_param.isServer = false;
-        resources = connect_peer_dma_client(net_param, rdma_param_dma, bufs);
+        resources = connect_peer_dma_client(net_param, rdma_param, bufs);
         socket_close(net_param);
-    }
-    else if (!FLAGS_serverIp.empty()) // relay
+    } else if (FLAGS_nodeType == RELAY) // relay
     {
         net_param.isServer = true;
-        resources = connect_peer_dma_relay(net_param, rdma_param_dma, bufs);
+        resources = connect_peer_dma_relay(net_param, rdma_param, qp_handlers_server, bufs);
         socket_close(net_param);
     }
 
     std::vector<std::thread> threads(FLAGS_threads);
-    // print begin time UTC
-    char time_str[100];
-    time_t now = time(NULL);
-    strftime(time_str, 100, "%Y-%m-%d %H:%M:%S", localtime(&now));
-    printf("begin time: %s\n", time_str);
-    printf("Thread\tSecond(s)\tThroughput(Gbps)\n");
-    for (size_t i = 0; i < FLAGS_threads; i++)
-    {
-        // <<< DEBUG
-        fprintf(stderr, "FLAGS_threads %ld\n", FLAGS_threads);
-        // >>> DEBUG
+    for (size_t i = 0; i < FLAGS_threads; i++) {
         size_t now_index = i + FLAGS_coreOffset;
-        if (FLAGS_is_server)
-        {
-            if (FLAGS_serverIp.empty()) // Server
-            {
-                threads[i] = std::thread(sub_task_server, now_index, qp_handlers[i]);
-            }
-            else // Relay
-            {
-                threads[i] = std::thread(sub_task_relay, now_index, qp_handlers[i], resources + i, bufs);
-            }
-        }
-        else // Client
-        {
+        if (FLAGS_nodeType == CLIENT) {
             threads[i] = std::thread(sub_task_client, now_index, resources + i);
+        } else if (FLAGS_nodeType == RELAY) {
+            init_raw_packet_handler(qp_handlers_server[i], i);
+            threads[i] = std::thread(sub_task_relay, now_index, qp_handlers_server[i], resources + i, bufs);
+        } else if (FLAGS_nodeType == SERVER) {
+            threads[i] = std::thread(sub_task_server, now_index, qp_handlers_server[i]);
         }
         bind_to_core(threads[i], FLAGS_numaNode, now_index);
     }
 
-    for (size_t i = 0; i < FLAGS_threads; i++)
-    {
+    for (size_t i = 0; i < FLAGS_threads; i++) {
         threads[i].join();
     }
 
-    // for (size_t i = 0;i < FLAGS_threads;i++) {
-    //     free(qp_handlers[i]->send_sge_list);
-    //     free(qp_handlers[i]->recv_sge_list);
-    //     free(qp_handlers[i]->send_wr);
-    //     free(qp_handlers[i]->recv_wr);
-
-    //     smartns_destroy_qp(qp_handlers[i]->qp);
-    //     smartns_destroy_cq(qp_handlers[i]->send_cq);
-    //     smartns_destroy_cq(qp_handlers[i]->recv_cq);
-    //     smartns_dereg_mr(qp_handlers[i]->mr);
-
-    //     if (i == 0) {
-    //         smartns_dealloc_pd(qp_handlers[0]->pd);
-    //         smartns_close_device(rdma_param.contexts[0]);
-    //     }
-    //     free_huge_mem(reinterpret_cast<void *>(qp_handlers[i]->buf));
-    //     free(qp_handlers[i]);
-    // }
-
-    if (qp_handlers != nullptr)
-    {
-        delete[] qp_handlers;
-    }
+    delete[] qp_handlers_server;
     delete[] bufs;
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     signal(SIGINT, ctrl_c_handler);
     signal(SIGTERM, ctrl_c_handler);
 
