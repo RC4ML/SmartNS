@@ -137,7 +137,7 @@ void sub_task_relay(size_t thread_index, qp_handler *handler_server, qp_handler 
         }
 
         //plus one cc
-        if (send_client.index() < ops && send_server.index() - send_server_comp.index() <= PKT_HANDLE_BATCH && send_client.index() - send_client_comp.index() <= tx_depth - batch_size) {
+        if (send_client.index() < ops && send_server.index() - send_server_comp.index() <= PKT_SEND_OUTSTANDING && send_client.index() - send_client_comp.index() <= tx_depth - batch_size) {
             size_t now_send_num = std::min(ops - send_client.index(), batch_size);
             post_send_batch(*handler_client, now_send_num, send_client, FLAGS_payload_size - 64);
         }

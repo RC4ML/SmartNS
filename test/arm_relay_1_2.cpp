@@ -164,7 +164,7 @@ void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *res
             send_server_comp.step(PKT_HANDLE_BATCH);
         }
 
-        if (send_client.index() < ops && send_server.index() - send_server_comp.index() <= PKT_HANDLE_BATCH && send_client.index() - send_client_comp.index() <= tx_depth - FLAGS_batch_size) {
+        if (send_client.index() < ops && send_server.index() - send_server_comp.index() <= PKT_SEND_OUTSTANDING && send_client.index() - send_client_comp.index() <= tx_depth - FLAGS_batch_size) {
             size_t now_send_num = std::min(ops - send_client.index(), batch_size);
             for (size_t i = 0; i < now_send_num; i++) {
                 dma_qpx->wr_id = send_client.index();
