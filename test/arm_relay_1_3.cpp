@@ -123,7 +123,18 @@ void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *res
     begin_time.tv_sec = 0;
 
     clock_gettime(CLOCK_MONOTONIC, &begin_time);
+    // size_t tsc_prev = get_tsc();
+    // size_t finished_ops = 0;
     while (!done && !stop_flag) {
+        // if (thread_index == 0) {
+        //     size_t tsc_now = get_tsc();
+        //     size_t now_finished_ops = send_server_comp.index();
+        //     if (tsc_now - tsc_prev > 5 * 1e7) {
+        //         printf("%.2lf\n", 8.0 * (now_finished_ops - finished_ops) * FLAGS_threads * FLAGS_payload_size * get_tsc_freq_per_ns() / (tsc_now - tsc_prev));
+        //         tsc_prev = tsc_now;
+        //         finished_ops = now_finished_ops;
+        //     }
+        // }
 
         ne_send_server = poll_send_cq(*handler, wc_send);
         for (size_t i = 0; i < ne_send_server; i++) {
