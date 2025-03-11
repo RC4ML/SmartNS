@@ -531,6 +531,7 @@ void post_send(qp_handler &qp_handler, size_t offset, int length) {
     }
     qp_handler.send_wr->wr_id = offset;
     qp_handler.send_wr->next = NULL;
+    qp_handler.send_wr->wr.rdma.remote_addr = qp_handler.remote_buf + offset;
 
     assert(ibv_post_send(qp_handler.qp, qp_handler.send_wr, &qp_handler.send_bar_wr) == 0);
 }
@@ -557,6 +558,7 @@ void post_send_batch(qp_handler &qp_handler, int batch_size, offset_handler &han
         }
         qp_handler.send_wr[i].wr_id = handler.offset();
         qp_handler.send_wr[i].next = NULL;
+        qp_handler.send_wr[i].wr.rdma.remote_addr = qp_handler.remote_buf + handler.offset();
         // if (handler.index() % SEND_CQ_BATCH == SEND_CQ_BATCH - 1) {
         //     qp_handler.send_wr[i].send_flags = IBV_SEND_SIGNALED;
         // } else {
