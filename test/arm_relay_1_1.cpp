@@ -402,8 +402,8 @@ int main(int argc, char *argv[]) {
         throw std::runtime_error("Invalid payload_size");
     }
 
-    assert(setenv("MLX5_TOTAL_UUARS", "129", 0) == 0);
-    assert(setenv("MLX5_NUM_LOW_LAT_UUARS", "128", 0) == 0);
+    assert(setenv("MLX5_TOTAL_UUARS", "17", 0) == 0);
+    assert(setenv("MLX5_NUM_LOW_LAT_UUARS", "16", 0) == 0);
 
     benchmark();
 
