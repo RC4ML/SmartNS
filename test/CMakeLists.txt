@@ -17,6 +17,8 @@ add_executable(arm_relay_2_3 ${PROJECT_SOURCE_DIR}/arm_relay_2_3.cpp)
 
 
 add_executable(test_pipe ${PROJECT_SOURCE_DIR}/test_pipe.cpp)
+add_executable(linked_list_rdma ${PROJECT_SOURCE_DIR}/linked_list_rdma.cpp)
+add_executable(linked_list_relay ${PROJECT_SOURCE_DIR}/linked_list_relay.cpp)
 
 target_link_libraries(test_context smartns)
 
@@ -32,5 +34,7 @@ target_link_libraries(arm_relay_1_3 smartns)
 target_link_libraries(arm_relay_2_1 smartns)
 target_link_libraries(arm_relay_2_2 smartns)
 target_link_libraries(arm_relay_2_3 smartns)
+target_link_libraries(linked_list_rdma smartns)
+target_link_libraries(linked_list_relay smartns)
 
 target_link_libraries(test_pipe smartns)
