@@ -11,8 +11,8 @@
 #include <chrono>
 #include <unordered_map>
 
-// client: ./linked_list_relay -num_queries 65535 -deviceName mlx5_0 -serverIp 10.0.0.100 -relayIp 10.0.0.101
-// relay:  ./linked_list_relay -num_queries 65535 -deviceName mlx5_2 -serverIp 10.0.0.100 -is_relay
+// client: ./linked_list_relay -num_queries 65535 -deviceName mlx5_0 -serverIp 10.0.0.200 -relayIp 10.0.0.201
+// relay:  ./linked_list_relay -num_queries 65535 -deviceName mlx5_2 -serverIp 10.0.0.200 -is_relay
 // server: ./linked_list_relay -num_queries 65535 -deviceName mlx5_0
 
 // Adding list size parameter
@@ -37,9 +37,9 @@ inline bool is_client() {
 static constexpr size_t VALUE_SIZE = 64;
 
 struct Node {
-    int key;
     struct Node *next;
     void *value;       // Keep as pointer to separate memory
+    int key;
     char padding[108]; // Adjusted to make each node 128 bytes (two cache lines)
 };
 
@@ -248,7 +248,7 @@ int dma_memcpy_sync(ibv_qp_ex *qpx, mlx5dv_qp_ex *mqpx, uint32_t local_mkey, voi
 
 // Add relay task function
 void sub_task_relay(qp_handler *client_handler, vhca_resource *server_resource) {
-    // wait_scheduling(0, 0);
+    wait_scheduling(0, 1);
 
     // Initialize DMA components for server memory access
     ibv_mr *local_mr = ibv_reg_mr(server_resource->pd, (void *)client_handler->buf, base_alloc_size,
@@ -335,7 +335,7 @@ void sub_task_relay(qp_handler *client_handler, vhca_resource *server_resource) 
             size_t dma_end = get_tsc();
             size_t dma_duration = dma_end - dma_start;
             query_dma_time += dma_duration;
-            hdr_record_value_atomic(dma_histogram, dma_duration * 10); // *10 to convert to ns when printing
+            hdr_record_value(dma_histogram, dma_duration * 10); // *10 to convert to ns when printing
             dma_operations++;
 
             hops++;
@@ -351,7 +351,7 @@ void sub_task_relay(qp_handler *client_handler, vhca_resource *server_resource) 
                 dma_end = get_tsc();
                 dma_duration = dma_end - dma_start;
                 query_dma_time += dma_duration;
-                hdr_record_value_atomic(dma_histogram, dma_duration * 10);
+                hdr_record_value(dma_histogram, dma_duration * 10);
                 dma_operations++;
 
                 found = true;
@@ -386,7 +386,7 @@ void sub_task_relay(qp_handler *client_handler, vhca_resource *server_resource) 
     printf("\nDMA operation statistics:\n");
     printf("Total DMA operations: %lu\n", dma_operations);
     printf("Average DMA operation time: %.2f cycles (%.2f ns)\n",
-        avg_dma_time, avg_dma_time * get_tsc_freq_per_ns());
+        avg_dma_time, avg_dma_time / get_tsc_freq_per_ns());
 
     printf("\nDMA operation latency:\n");
     hdr_percentiles_print(dma_histogram, stdout, 5, 10 * get_tsc_freq_per_ns(), CLASSIC);
@@ -405,7 +405,7 @@ void sub_task_relay(qp_handler *client_handler, vhca_resource *server_resource) 
 
 // Modify sub_task_server to share ListInfo with relay
 void sub_task_server(qp_handler *handler) {
-    // wait_scheduling(0, 0);
+    wait_scheduling(0, 1);
 
     // Initialize linked list in server thread
     Node *nodes = reinterpret_cast<Node *>(handler->buf);
@@ -426,7 +426,7 @@ void sub_task_server(qp_handler *handler) {
 
 // Modify sub_task_client to send queries to relay and receive results
 void sub_task_client(qp_handler *handler) {
-    // wait_scheduling(0, 0);
+    wait_scheduling(0, 1);
 
     // Buffer for sending queries and receiving results
     Query *query = reinterpret_cast<Query *>(handler->buf);
@@ -466,17 +466,17 @@ void sub_task_client(qp_handler *handler) {
         size_t duration = end_time - start_time;
 
         // Record latency
-        hdr_record_value_atomic(histogram, duration * 10); // *10 to convert to ns when printing
+        hdr_record_value(histogram, duration * 10); // *10 to convert to ns when printing
 
         // Update statistics
         total_hops += result->hops;
         total_query_time += duration;
 
-        if (i % 10000 == 0) {
-            printf("Query %zu: Key %d %s after %d hops in %.2f us\n",
-                i, target_key, result->found ? "found" : "not found",
-                result->hops, duration * get_tsc_freq_per_ns() / 1000.0);
-        }
+        // if (i % 10000 == 0) {
+        //     printf("Query %zu: Key %d %s after %d hops in %.2f us\n",
+        //         i, target_key, result->found ? "found" : "not found",
+        //         result->hops, duration * get_tsc_freq_per_ns() / 1000.0);
+        // }
     }
 
     // Send termination signal
@@ -490,7 +490,7 @@ void sub_task_client(qp_handler *handler) {
     printf("\nAverage Statistics:\n");
     printf("Average hops per query: %.2f\n", avg_hops);
     printf("Average query time: %.2f cycles (%.2f us)\n",
-        avg_query_time, avg_query_time * get_tsc_freq_per_ns() / 1000.0);
+        avg_query_time, avg_query_time / get_tsc_freq_per_ns() / 1000.0);
 
     printf("\nLatency statistics:\n");
     hdr_percentiles_print(histogram, stdout, 5, 10 * get_tsc_freq_per_ns(), CLASSIC);
@@ -594,6 +594,7 @@ void benchmark() {
     qp_handler *handler = nullptr;
     vhca_resource *dma_resource = nullptr;
 
+    std::thread thread;
     // Setup connections based on role
     if (is_server()) {
         // Setup new TCP connection for DMA resources
@@ -605,7 +606,8 @@ void benchmark() {
         handler = (qp_handler *)malloc(sizeof(qp_handler));
         handler->buf = (size_t)bufs[0];
 
-        sub_task_server(handler);
+        thread = std::thread(sub_task_server, handler);
+        bind_to_core(thread, 0, 1);
     } else if (is_relay()) {
         // Setup DMA access to server memory
         net_param.sock_port = FLAGS_port + 1;
@@ -630,7 +632,8 @@ void benchmark() {
 
         connect_qp_rc(rdma_param, *client_handler, &info2[1], &info2[0]);
 
-        sub_task_relay(client_handler, dma_resource);
+        thread = std::thread(sub_task_relay, client_handler, dma_resource);
+        bind_to_core(thread, 0, 1);
     } else {
         // Client connects to relay via RDMA
         net_param.serverIp = FLAGS_relayIp;
@@ -649,8 +652,11 @@ void benchmark() {
 
         connect_qp_rc(rdma_param, *handler, &info[1], &info[0]);
 
-        sub_task_client(handler);
+        thread = std::thread(sub_task_client, handler);
+        bind_to_core(thread, 0, 1);
     }
+
+    thread.join();
 
     // Cleanup
     if (handler) {

@@ -23,9 +23,9 @@ inline bool is_server() {
 }
 
 struct Node {
-    int key;
     struct Node *next;
     void *value;       // Keep as pointer to separate memory
+    int key;
     char padding[108]; // Adjusted to make each node 128 bytes (two cache lines)
 };
 
@@ -195,7 +195,7 @@ int rdma_recv_sync(qp_handler &handler, void *local_buf, size_t size) {
 
 // Modify sub_task_server to send the ListInfo directly
 void sub_task_server(qp_handler *handler) {
-    // wait_scheduling(0, 0);
+    wait_scheduling(0, 1);
 
     // Initialize linked list in server thread
     Node *nodes = reinterpret_cast<Node *>(handler->buf);
@@ -223,7 +223,7 @@ void sub_task_server(qp_handler *handler) {
 
 // Modify sub_task_client to receive ListInfo directly
 void sub_task_client(qp_handler *handler) {
-    // wait_scheduling(0, 0);
+    wait_scheduling(0, 1);
 
     ListInfo *list_info = reinterpret_cast<ListInfo *>(
         reinterpret_cast<char *>(handler->buf) + base_alloc_size - sizeof(ListInfo));
@@ -243,13 +243,13 @@ void sub_task_client(qp_handler *handler) {
 
     // Initialize histogram for latency measurements
     struct hdr_histogram *histogram;
-    hdr_init(1, 1000000, 3, &histogram); // 1us to 1s range with 3 significant digits
+    hdr_init(1000, 100000000, 3, &histogram); // 1us to 1s range with 3 significant digits
 
     // Add tracking for hops and RDMA access time
     uint64_t total_hops = 0;
     uint64_t total_rdma_time_us = 0;
     struct hdr_histogram *rdma_histogram;
-    hdr_init(1, 1000000, 3, &rdma_histogram);
+    hdr_init(1000, 10000000, 3, &rdma_histogram);
 
     Node *current = list_info->head;
     int target_key = 0;
@@ -304,10 +304,10 @@ void sub_task_client(qp_handler *handler) {
         total_hops += hops;
         total_rdma_time_us += query_rdma_time_us;
 
-        if (i % 10000 == 0) {
-            printf("Query %zu: Found key %d after %d hops in %lu tsc units (RDMA time: %lu tsc units)\n",
-                i, target_key, hops, duration, query_rdma_time_us);
-        }
+        // if (i % 10000 == 0) {
+        //     printf("Query %zu: Found key %d after %d hops in %lu tsc units (RDMA time: %lu tsc units)\n",
+        //         i, target_key, hops, duration, query_rdma_time_us);
+        // }
     }
 
     // Calculate and print averages
@@ -376,12 +376,17 @@ void benchmark() {
     connect_qp_rc(rdma_param, *handler, &info[1], &info[0]);
 
     // Execute server or client task directly in the main thread
+
+    std::thread thread;
     if (is_server()) {
-        sub_task_server(handler);
+        thread = std::thread(sub_task_server, handler);
+        bind_to_core(thread, 0, 1);
     } else {
-        sub_task_client(handler);
+        thread = std::thread(sub_task_client, handler);
+        bind_to_core(thread, 0, 1);
     }
 
+    thread.join();
     // Cleanup
     free(handler->send_sge_list);
     free(handler->recv_sge_list);
