@@ -501,6 +501,9 @@ void sub_task_client(qp_handler *handler) {
 
 // Add function for DMA connection between relay and server
 vhca_resource *connect_peer_dma(tcp_param &net_param, rdma_param &rdma_param, void **bufs) {
+    size_t dummy;
+    (void)dummy;
+
     vhca_resource *resources = new vhca_resource[1]; // Just need one for this application
     roce_init(rdma_param, 1);
     socket_init(net_param);
@@ -539,10 +542,10 @@ vhca_resource *connect_peer_dma(tcp_param &net_param, rdma_param &rdma_param, vo
             caps.vhca_id, resources[0].addr, resources[0].mkey);
 
         // Send resource info to relay
-        write(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource));
+        dummy = write(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource));
     } else if (is_relay()) {
         // Relay imports memory from server
-        read(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource));
+        dummy = read(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource));
 
         uint32_t mmo_dma_max_length = get_mmo_dma_max_length(rdma_param.contexts[0]);
         fprintf(stderr, "Relay: mmo_dma_max_length %u\n", mmo_dma_max_length);

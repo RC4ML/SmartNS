@@ -411,20 +411,26 @@ void dpu_dma_copy_check(rdma_param &rdma_param, qp_handler **handlers, size_t th
  *
  */
 vhca_resource *connect_peer_dma_client(tcp_param &net_param, rdma_param &rdma_param, void **bufs) {
+    size_t dummy;
+    (void)dummy;
+
     vhca_resource *resources = new vhca_resource[FLAGS_threads];
     socket_init(net_param);
 
     host_dma_copy_export(rdma_param, FLAGS_threads, bufs, resources);
-    write(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource) * FLAGS_threads);
+    dummy = write(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource) * FLAGS_threads);
 
     return resources;
 }
 
 vhca_resource *connect_peer_dma_relay(tcp_param &net_param, rdma_param &rdma_param, qp_handler **handlers, void **bufs) {
+    size_t dummy;
+    (void)dummy;
+
     vhca_resource *resources = new vhca_resource[FLAGS_threads];
     socket_init(net_param);
 
-    read(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource) * FLAGS_threads);
+    dummy = read(net_param.connfd, reinterpret_cast<char *>(resources), sizeof(vhca_resource) * FLAGS_threads);
     dpu_dma_copy_check(rdma_param, handlers, FLAGS_threads, bufs, resources);
 
     return resources;

@@ -28,7 +28,7 @@ static size_t get_tsc() {
 #else 
 static double get_tsc_freq_per_ns() {
     // sudo dmesg | grep resolution
-    return 0.330238342;
+    return 0.330276489;
 }
 
 static size_t get_tsc() {
