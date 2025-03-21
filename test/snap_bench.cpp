@@ -217,7 +217,7 @@ void benchmark() {
 
     for (size_t i = 0;i < FLAGS_threads;i++) {
         connect_qp_rc(rdma_param, *qp_handlers[i], info + i + FLAGS_threads, info + i);
-        init_wr_base_write(*qp_handlers[i]);
+        init_wr_base_send_recv(*qp_handlers[i]);
     }
 
     vector<thread> threads(FLAGS_threads);
