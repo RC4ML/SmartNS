@@ -21,6 +21,7 @@ add_executable(linked_list_rdma ${PROJECT_SOURCE_DIR}/linked_list_rdma.cpp)
 add_executable(linked_list_relay ${PROJECT_SOURCE_DIR}/linked_list_relay.cpp)
 
 add_executable(snap_bench ${PROJECT_SOURCE_DIR}/snap_bench.cpp)
+add_executable(solar_bench ${PROJECT_SOURCE_DIR}/solar_bench.cpp)
 
 target_link_libraries(test_context smartns)
 
@@ -39,5 +40,6 @@ target_link_libraries(arm_relay_2_3 smartns)
 target_link_libraries(linked_list_rdma smartns)
 target_link_libraries(linked_list_relay smartns)
 target_link_libraries(snap_bench smartns)
+target_link_libraries(solar_bench smartns)
 
 target_link_libraries(test_pipe smartns)
