@@ -96,6 +96,7 @@ set(UTILSOURCES
     ${CMAKE_SOURCE_DIR}/utils/numautil.cpp
     ${CMAKE_SOURCE_DIR}/utils/buddy.cpp
     ${CMAKE_SOURCE_DIR}/utils/allocator.cpp
+    ${CMAKE_SOURCE_DIR}/utils/Crc32.cpp
 )
 
 set(DEVXSOURCES 
