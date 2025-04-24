@@ -129,7 +129,7 @@ void sub_task_relay(size_t thread_index, qp_handler *handler_server, vhca_resour
         handler_server->recv_wr[i].next = nullptr;
     }
 
-    size_t ops = FLAGS_iterations * (BUF_SIZE) / PKT_BUF_SIZE;
+    size_t ops = FLAGS_iterations * 2048;
     ops = round_up(ops, FLAGS_batch_size);
     ops = round_up(ops, SEND_CQ_BATCH);
 
