@@ -236,11 +236,11 @@ void sub_task_client(int thread_index, qp_handler *handler, size_t ops) {
 
     clock_gettime(CLOCK_MONOTONIC, &end_time);
     double duration = (end_time.tv_sec - begin_time.tv_sec) + (end_time.tv_nsec - begin_time.tv_nsec) / 1e9;
-    double speed = 8.0 * send_comp.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
+    double speed = 8.0 * send_comp.index()  / 1000 / 1000 / duration;
 
     std::lock_guard<std::mutex> guard(IO_LOCK);
     total_bw = total_bw + speed;
-    printf("Data verification success, thread [%d], duration [%f]s, throughput [%f] Gpbs\n", thread_index, duration, speed);
+    printf("Data verification success, thread [%d], duration [%f]s, throughput [%f] Mops\n", thread_index, duration, speed);
 
     free(wc_send);
 }
@@ -300,7 +300,7 @@ void benchmark() {
     for (size_t i = 0;i < FLAGS_threads;i++) {
         threads[i].join();
     }
-    printf("Total bandwidth: %f Gbps\n", total_bw.load());
+    printf("Total Speed: %f Mops\n", total_bw.load());
     for (size_t i = 0;i < FLAGS_threads;i++) {
         free(qp_handlers[i]->send_sge_list);
         free(qp_handlers[i]->recv_sge_list);

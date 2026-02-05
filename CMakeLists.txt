@@ -125,11 +125,14 @@ set(EXTRASOURCES
     ${CMAKE_SOURCE_DIR}/src/rdma_cm/libsmartns.cpp
 )
 
-set(LIBRARIES ${LIBRARIES} mlx5 ibverbs pthread numa gflags hdr_histogram_static minipcm_static)
-
-add_executable(smartns_dpu ${UTILSOURCES} ${DEVXSOURCES} ${RXESOURCES} ${DPUSOURCES})
-target_link_libraries(smartns_dpu ${LIBRARIES})
+set(LIBRARIES ${LIBRARIES} ibverbs mlx5 pthread numa gflags hdr_histogram_static minipcm_static)
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib)
 add_subdirectory(${CMAKE_SOURCE_DIR}/test)
+
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+    add_executable(smartns_dpu ${UTILSOURCES} ${DEVXSOURCES} ${RXESOURCES} ${DPUSOURCES})
+    target_link_libraries(smartns_dpu ${LIBRARIES})
+endif ()
+
 
