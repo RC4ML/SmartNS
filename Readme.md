@@ -23,6 +23,8 @@ See [DEPLOY.md](./doc/DEPLOY.md) for connecting to our artifact machine and  dep
 If Check if the configuration is correct in Run Experiments of [EXP.md](./doc/EXP.md) passes, then everything will be fine. Please refer to exp.md for more details.
 
 ## Directory Structure
+
+~~~
 .
 ├── doc
 ├── include
@@ -52,6 +54,7 @@ If Check if the configuration is correct in Run Experiments of [EXP.md](./doc/EX
 │   ├── parallel-hashmap
 │   └── rdma-core
 └── utils
+~~~
 
 ### ThirdParty
 
