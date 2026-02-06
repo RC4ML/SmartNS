@@ -1,18 +1,20 @@
 # Installation
 
-This document shows all of the essential software installation process on test machine. 
+This document describes the essential software installation and system configuration steps on the test machines.
 
-BE ATTENTION that **We already install all dependencies on our artifact machines.**
+**Note:** We have already installed all dependencies on the artifact machines.
 
-## 1. Initial BF3:
+## 1. Initialize BF3
 
-Please refer DOCA document https://docs.nvidia.com/doca/archive/3-1-0/bf-bundle+installation+and+upgrade/index.html to initial BF3 SmartNIC.
+Please refer to the DOCA document below to initialize the BF3 SmartNIC:
 
-We already initialize on AE machine.
+https://docs.nvidia.com/doca/archive/3-1-0/bf-bundle+installation+and+upgrade/index.html
 
-## 2. Install NFS/NTP:
+Initialization has already been completed on the AE machines.
 
-NFS is very useful for running experiment and scripts, here is the samples.
+## 2. Install NFS/NTP
+
+NFS is useful for running experiments and scripts. Example configuration:
 
 ~~~bash
 # NFS server's /etc/exports
@@ -26,7 +28,8 @@ sudo vim /etc/fstab
 sudo mount -a
 ~~~
 
-NTP is used to avoid clock skew on ninja build
+NTP is used to avoid clock skew during ninja builds:
+
 ~~~bash
 sudo apt install ntp
 sudo vim /etc/ntp.conf
@@ -35,22 +38,21 @@ add following line
 server 10.130.142.26 minpoll 3 maxpoll 3
 ~~~
 
-We already deploy NFS and NTP both on host and BF3 Arm sides.
-
+NFS and NTP are already deployed on both host and BF3 Arm sides.
 
 ## 3. Install DOCA/MLNX_OFED on host
 
-SmartNS doesn't rely on DOCA API for using BF3, instead of standard IB verbs API and invoke BF3 function by construct special opcode.
+SmartNS does not rely on the DOCA API. It uses the standard IB verbs API and invokes BF3 functions by constructing special opcodes.
 
-However, DOCA-all package include MLNX_OFED package, so we can just install DOCA-all package on host simply.
+The `doca-all` package includes MLNX_OFED, so you can install `doca-all` directly on host machines, or you can install `MLNX_OFED` instead.
 
-Please refer this [link](https://developer.nvidia.com/doca-downloads?deployment_platform=Host-Server&deployment_package=DOCA-Host&target_os=Linux&Architecture=x86_64&Profile=doca-all) to install, we already install host DOCA-all on AE machines.
+Please refer to this [link](https://developer.nvidia.com/doca-downloads?deployment_platform=Host-Server&deployment_package=DOCA-Host&target_os=Linux&Architecture=x86_64&Profile=doca-all). We have already installed host `doca-all` on the AE machines.
 
-## 4. Install customized libmlx5.so and libibverbs.so
+## 4. Install customized `libmlx5.so` and `libibverbs.so`
 
-We use customized rdma-core for high performance DMA and cache invalid operations, please build and install libmlx5.so and mlx5dv.h like following:
+We use a customized `rdma-core` for high-performance DMA and cache invalidation operations. Please build and install `libmlx5.so`, `libibverbs.so`, and `mlx5dv.h` as follows.
 
-Be attention, we need build customized libmlx5.so for both Host and Arm side! Although we only modify a little in libmlx5, however some ABI is not compatible, so we maybe also need to install libibverbs
+Please note that the customized `libmlx5.so` is required on both host and Arm sides. Although the modification in `libmlx5` is small, some ABI details are not fully compatible, so `libibverbs` may also need to be replaced.
 
 ~~~bash
 git clone https://github.com/cxz66666/rdma-core
@@ -66,7 +68,7 @@ sudo mv /lib/x86_64-linux-gnu/libibverbs.so.1.14.58.0 /lib/x86_64-linux-gnu/libi
 sudo cp ./lib/libmlx5.so.1.25.55.0 /lib/x86_64-linux-gnu/
 sudo cp ./lib/libibverbs.so.1.14.55.0 /lib/x86_64-linux-gnu/
 
-sudo rm /lib/x86_64-linux-gnu/libmlx5.so.1 /lib/x86_64-linux-gnu/libibverbs.so.1 
+sudo rm /lib/x86_64-linux-gnu/libmlx5.so.1 /lib/x86_64-linux-gnu/libibverbs.so.1
 
 sudo ln -sf /lib/x86_64-linux-gnu/libmlx5.so.1.25.55.0 /lib/x86_64-linux-gnu/libmlx5.so.1
 sudo ln -sf /lib/x86_64-linux-gnu/libibverbs.so.1.14.58.0 /lib/x86_64-linux-gnu/libibverbs.so.1
@@ -94,28 +96,30 @@ sudo ldconfig
 sudo cp ./include/infiniband/mlx5dv.h  /usr/include/infiniband/
 ~~~
 
+## 5. Modify boot GRUB file
 
-## 5. Modify boot grub file
+On the host side, update `GRUB_CMDLINE_LINUX` in `/etc/default/grub` as follows:
 
-On host side, we need update GRUB_CMDLINE_LINUX in /etc/default/grub like following
 ~~~bash
 sudo vim /etc/default/grub
 GRUB_CMDLINE_LINUX="intel_iommu=off iommu=pt pci=realloc=off"
 sudo update-grub
 ~~~
 
-On BF3 Arm side, we need isolate some Arm processes for test application
+On the BF3 Arm side, isolate some Arm cores for test applications:
+
 ~~~bash
 sudo vim /etc/default/grub
 GRUB_CMDLINE_LINUX=".... keep unmodify... isolcpus=0-11 nohz_full=0-11"
 sudo update-grub
 ~~~
 
+## 6. Bond two BF3 ports into one port
 
-## 6. Bond two BF3 port into one port
-We only have 2x200Gbps BF3, so we bond two port and provided as a 400Gbps interface for upper appliaction, if you euqip with 1x400Gbps BF3, this step can skip.
+We use 2x200Gbps BF3 and bond the two ports into one 400Gbps interface for upper applications. If your platform is equipped with 1x400Gbps BF3, you can skip this step.
 
-Please run following commands on Arm side!!!
+Please run the following commands on the Arm side:
+
 ~~~bash
 sudo mst start
 sudo mlxconfig -d /dev/mst/mt41692_pciconf0  s HIDE_PORT2_PF=True NUM_OF_PF=1
@@ -131,9 +135,10 @@ sudo ovs-vsctl del-port ovsbr1 p0
 sudo ovs-vsctl del-port ovsbr2 p1
 ~~~
 
-Then, do POWER CYCLE (cold reboot) to let the config take effect.
+Then perform a power cycle (cold reboot) to make the configuration take effect.
 
-After reboot, exec following commands(These commands need to exec every boot time):
+After reboot, execute the following commands (these commands must be executed after every boot):
+
 ~~~bash
 sudo ip link add bond0 type bond
 sudo ip link set bond0 down
@@ -146,12 +151,13 @@ sudo ip link set p0 up
 sudo ip link set p1 up
 sudo ip link set bond0 up
 # only need add-port one time
-sudo ovs-vsctl add-port ovsbr1 bond0 
+sudo ovs-vsctl add-port ovsbr1 bond0
 ~~~
 
+## 7. Set up `tmfifo_net0` IP
 
-## 7. Setup tmfifo_net0 IP
-Host side have tmfifo_net0 interface， we need set this interface IP to 192.168.100.1/30
+The host side has a `tmfifo_net0` interface. Set its IP to `192.168.100.1/30`.
+
 ~~~bash
 sudo vim /etc/netplan/50-cloud-init.yaml
 # add following lines
@@ -161,16 +167,15 @@ sudo vim /etc/netplan/50-cloud-init.yaml
       optional: true
 ~~~
 
-
-## 8. Install required libs:
+## 8. Install required libraries
 
 ~~~bash
 sudo apt install cmake libgflags-dev libnuma-dev libpci-dev
 ~~~
 
-## 9. Allocate enough 2M hugepage
+## 9. Allocate enough 2M huge pages
 
-We use systemd service to enable allocate memory after bootup.
+We use a systemd service to allocate memory after boot.
 
 ~~~bash
 # /etc/systemd/system/hugetlb-reserve-pages.sh
@@ -209,13 +214,14 @@ ExecStart=/etc/systemd/system/hugetlb-reserve-pages.sh
 WantedBy=sysinit.target
 ~~~
 
+## 10. Build all SmartNS software
 
-### 10. Check Building all SmartNS software
+Now create `build_host` and `build_dpu`, then build all software:
 
-Now we create `build_host` and `build_dpu` directory, and build all the software.
 ~~~bash
 git clone --recursive https://github.com/RC4ML/SmartNS
 cd SmartNS
+mkdir -p build_host build_dpu
 
 # on host
 cd build_host
@@ -223,9 +229,9 @@ cmake ..
 make -j
 
 # on arm
-cd build_dpu
+cd ../build_dpu
 cmake ..
 make -j
 ~~~
 
-It should report no error. And we will get the output binary in the build directory.
+The build should finish without errors, and binaries will be generated in the corresponding build directories.

@@ -1,22 +1,24 @@
 # Evaluation
 
-**Important:** All dependencies located in [INSTALL.md](./INSTALL.md) are installed on our artifact machine. 
+**Important:** All dependencies listed in [INSTALL.md](./INSTALL.md) are already installed on our artifact machines.
 
-**Important:** Please see [DEPLOY.md](./DEPLOY.md) for connecting to our artifact machine and deploying SmartNS on BlueField-3.
+**Important:** Please refer to [DEPLOY.md](./DEPLOY.md) for connecting to the artifact machines and deploying SmartNS on BlueField-3.
 
-**Important:** Please carefully follow the specified execution order and the corresponding machine during the experiment; otherwise, unexpected situations may occur.
+**Important:** Please strictly follow the specified execution order and machine assignment in each experiment; otherwise, unexpected behavior may occur.
 
-**Important:** Since this project involves the linux kernel module, kernel freezing / hang / illegal access is normal behavior. Please use ipmitools to power reset. Please refer to [DEPLOY.md](./DEPLOY.md) to prepare the environment after each machine restart.
+**Important:** Since this project involves Linux kernel modules, kernel freeze/hang/illegal access can occur. Please use `ipmitool` for power reset when needed, and then refer to [DEPLOY.md](./DEPLOY.md) to restore the environment after reboot.
 
 ## 0. Ensure link status
 
-We use following commands on Host1 to check link reachable:
+Use the following command on `Host1` to check reachability:
+
 ~~~bash
 # Host1
 ping -s 8192 10.0.0.200
-~~~ 
+~~~
 
-We use perftest to check link bandwidth:
+Use `perftest` to verify link bandwidth:
+
 ~~~bash
 git clone https://github.com/linux-rdma/perftest
 cd perftest && ./autogen.sh && ./configure
@@ -29,74 +31,83 @@ make -j
 ./ib_send_bw -d mlx5_0 -x 3 -q 8 -s 1048576 --run_infinitely 10.0.0.200
 ~~~
 
-If everything is OK, you will see BW average about 46750 MB/s (about 375Gbps)
+If everything is correct, you should see an average bandwidth around 46750 MB/s (about 375Gbps).
 
-## 1.  Header-only Offloading TX Path
+## 1. Header-only Offloading TX Path
 
-This is the evalution for fig.11 in the paper. Don't need run smartns_dpu and kernel module in this exp.
+This evaluation corresponds to Figure 11 in the paper. In this experiment, you do **not** need to run `smartns_dpu` or load the kernel module.
 
-### 1.1 Run the RDMA-assisted TX
+### 1.1 Run RDMA-assisted TX
 
-At first on **BF2**, run following command:
+First, on **BF2**, run:
+
 ~~~bash
 sudo ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 2 -payload_size 1024
 ~~~
 
-Then on **BF1**, run following command:
+Then, on **BF1**, run:
+
 ~~~bash
 sudo ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 2  -iterations 5000 -payload_size 1024
 ~~~
 
-At last on **Host1**, run following comamnd:
+Finally, on **Host1**, run:
+
 ~~~bash
 sudo ./arm_relay_1_1 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 2 -payload_size 1024 -serverIp 10.0.0.101
 ~~~
 
-You will see the output located on BF1, like following, then combine thread0 and thread1 bandwidth is the final result.
+You will see output on `BF1` similar to the following. Sum the bandwidth of `thread0` and `thread1` as the final result.
+
 ~~~bash
 thread [1], duration [2.842365]s, throughput [18.025908] Gbps
 thread [0], duration [3.154976]s, throughput [17.767303] Gbps
 ~~~
 
-You can change `payload_size` from 1024 to 8192 to view the result of different payloads.
+You can change `payload_size` from 1024 to 8192 to evaluate different payload sizes.
 
-After BF1 finish, you can use CTRL+C for Host1 and BF2 application, they are hardcode as a spin loop :) .
+After `BF1` finishes, you can stop applications on `Host1` and `BF2` with `CTRL+C` (these programs are hardcoded with spin loops).
 
-### 1.2 Run the DMA-assisted TX
+### 1.2 Run DMA-assisted TX
 
-just change `arm_relay_1_1` to `arm_relay_1_2`, others totally same as 1.1
+Change `arm_relay_1_1` to `arm_relay_1_2`; other settings are identical to Section 1.1.
 
 ### 1.3 Run Header-only Offloading TX Path
 
-just change `arm_relay_1_2` to `arm_relay_1_3`.
+Change `arm_relay_1_2` to `arm_relay_1_3`.
 
 ### 1.4 Check Arm memory bandwidth
 
-You can see a python script named scripts/bf3_memory_bw.py, when running above experiments, you can use `python3 ./scripts/bf3_memory_bw.py` on **BF1** to check the Arm bandwidth.
+Use `scripts/bf3_memory_bw.py`. While running the above experiments, execute `python3 ./scripts/bf3_memory_bw.py` on **BF1** to monitor Arm memory bandwidth.
 
-This script will output the average Arm memory bandwidth at one-second intervals.
+This script outputs average Arm memory bandwidth at one-second intervals.
 
 ## 2. Unlimited-working-set In-Cache Processing RX Path
 
-This is the evalution for fig.13 in the paper, please note that application have different location and different launch policy compared with exp1.
+This evaluation corresponds to Figure 13 in the paper. Please note that the application placement and launch policy differ from Experiment 1.
 
-### 2.1 Run the Unlimited-working-set In-Cache Processing RX Path
-At first on **BF2**, run following command:
+### 2.1 Run Unlimited-working-set In-Cache Processing RX Path
+
+First, on **BF2**, run:
+
 ~~~bash
 sudo ./arm_relay_2_3 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 8 -payload_size 8192
 ~~~
 
-Then at **Host2**, run following command:
+Then, on **Host2**, run:
+
 ~~~bash
 sudo ./arm_relay_2_3 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 2 -threads 8  -serverIp 10.0.0.201 -payload_size 8192
 ~~~
 
-At last at **BF1**, run following command:
+Finally, on **BF1**, run:
+
 ~~~bash
 sudo ./arm_relay_2_3 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 0 -threads 8  -payload_size 8192
 ~~~
 
-You will see the output located on BF2, like following, then combine all threads bandwidth is the final result.
+You will see output on `BF2` similar to the following. Sum all thread bandwidth values as the final result.
+
 ~~~bash
 thread [2], duration [2.632949]s, recv speed [50.976189] Gbps
 thread [3], duration [2.660956]s, recv speed [50.439698] Gbps
@@ -108,51 +119,56 @@ thread [1], duration [2.952497]s, recv speed [45.459082] Gbps
 thread [0], duration [2.994036]s, recv speed [44.828368] Gbps
 ~~~
 
-You can change `payload_size` from 1024 to 8192 to view the result of different payloads.
+You can change `payload_size` from 1024 to 8192 to evaluate different payload sizes.
 
-After BF2 finish, you can use CTRL+C for Host2 and BF1 application, they are hardcode as a spin loop .
+After `BF2` finishes, you can stop applications on `Host2` and `BF1` with `CTRL+C` (these programs are hardcoded with spin loops).
 
 ### 2.2 RDMA-assisted RX
 
-just change `arm_relay_2_3` to `arm_relay_2_1`.
+Change `arm_relay_2_3` to `arm_relay_2_1`.
 
 ### 2.3 DMA-assisted RX
 
-just change `arm_relay_2_1` to `arm_relay_2_2`.
+Change `arm_relay_2_1` to `arm_relay_2_2`.
 
 ### 2.4 Check Arm LLC bandwidth
 
-You can see a python script named scripts/bf3_llc_bw.py, when running above experiments, you can use `python3 ./scripts/bf3_llc_bw.py` on **BF2** to check the Arm LLC bandwidth.
+Use `scripts/bf3_llc_bw.py`. While running the above experiments, execute `python3 ./scripts/bf3_llc_bw.py` on **BF2** to monitor Arm LLC bandwidth.
 
-This script will output the average Arm LLC bandwidth at one-second intervals.
+This script outputs average Arm LLC bandwidth at one-second intervals.
 
+## 3. Comparison with other network stacks
 
-## 3. Comparison with other Network Stacks
+This evaluation corresponds to Figure 10 in the paper.
 
-This is the evalution for fig.10 in the paper.
+### 3.1 SNAP baseline
 
-### 3.1 Snap baseline
+On `Host2`:
 
-On Host2:
+~~~bash
+sudo ./snap_bench -is_server  -iterations 1000 -numPack 51200 -payload_size 2048  -threads 1
 ~~~
-sudo ./snap_bench -is_server  -iterations 1000 -numPack 51200 -payload_size 2048  -threads 1 
-~~~
 
-Then on Host1:
-~~~
+Then on `Host1`:
+
+~~~bash
 sudo ./snap_bench -serverIp 10.0.0.200  -iterations 1000 -numPack 51200 -payload_size 2048 -threads 1
 ~~~
 
-After finish, you can see the result like following, and you can change `threads` args to change connection number:
+After completion, you should see output similar to:
+
 ~~~bash
 26:099551 INFOR: Thread [ 0] has been moved to core [ 0]
 Data verification success, thread [0], duration [23.126377]s, throughput [36.272902] GpbsTotal bandwidth: 36.272902 Gbps
 ~~~
 
+You can change `threads` to vary the number of connections.
 
 ### 3.2 RDMA baseline
 
-Due to some limitation, we left RDMA baseline code in another repo https://github.com/carlzhang4/libr, please exec following commands on Host1
+Due to limitations, RDMA baseline code is maintained in another repository: https://github.com/carlzhang4/libr
+
+Please execute the following commands on `Host1`:
 
 ~~~bash
 git clone --recursive https://github.com/carlzhang4/libr
@@ -162,21 +178,23 @@ cd build_host && cmake ..
 make -j
 ~~~
 
-Then, on Host2, exec following command:
+Then on `Host2`, run:
+
 ~~~bash
 sudo ./rdma_bench -nodeId 0 -serverIp 10.0.0.200 -iterations 500 -packSize 2048 -numPack 51200 -threads 1
 ~~~
 
-At last, one Host1, exec following command:
+Finally, on `Host1`, run:
+
 ~~~bash
 sudo ./rdma_bench -nodeId 1 -serverIp 10.0.0.200 -iterations 500 -packSize 2048 -numPack 51200 -threads 1
 ~~~
 
-You can change `threads` args to change connection number
+You can change `threads` to vary the number of connections.
 
 ### 3.3 SmartNS
 
-Please refer section 6 Deploy SmartNS in [DEPLOY.md](./DEPLOY.md), follow the exec order(run smartns_dpu and load linux kernel module) and change the host commands to:
+Please refer to Section 6 in [DEPLOY.md](./DEPLOY.md), follow the execution order (run `smartns_dpu` and load the Linux kernel module), and use the following host commands:
 
 ~~~bash
 ## Host2(Server)
@@ -185,41 +203,43 @@ Please refer section 6 Deploy SmartNS in [DEPLOY.md](./DEPLOY.md), follow the ex
 ## Host1(Client)
 ./write_bw -deviceName mlx5_0 -batch_size 1 -outstanding 80 -payload_size 2048 -serverIp 10.0.0.200 -iterations 10000 -threads 1
 ~~~
-You can change `threads` args to change connection number
 
-### 3.4 Check Host memory bandwidth
+You can change `threads` to vary the number of connections.
 
-You can simply check host memory bandwidth by
+### 3.4 Check host memory bandwidth
+
+You can check host memory bandwidth by running:
+
 ~~~bash
 sudo pcm-memory
 ~~~
 
 ## 4. Solar application
 
-This is the evalution for fig.16 in the paper.
+This evaluation corresponds to Figure 16 in the paper.
 
-On Host2, exec following command:
+On `Host2`, run:
+
 ~~~bash
 sudo ./solar_bench -is_server  -iterations 100 -numPack 51200 -payload_size 4096 -threads 1  -type 0
 ~~~
 
-On Host1, exec following:
+On `Host1`, run:
+
 ~~~bash
 sudo ./solar_bench -serverIp 10.0.0.200  -iterations 100 -numPack 51200 -payload_size 4096  -threads 1  -type 0
 ~~~
 
-You will see the result like following:
+You should see output similar to:
+
 ~~~bash
 Total Speed: 5.030016 Mops
 ~~~
 
-You can change differnet type and threads for more data points.
+You can change different `type` and `threads` settings for additional data points.
 
 |                           | Type |
 | ------------------------- | ---- |
 | CPU-only                  | 0    |
 | CPU+w/ CRC offload        | 1    |
 | CPU+w/ CRC offload+w/ DSA | 2    |
-
-
-

@@ -1,30 +1,31 @@
 # Connect and Deploy SmartNS
 
-We provide 2 machines for AE reviewers. Each machine is equipped with an Nvidia BlueField-3 B3220 400GbE NIC and connected back-to-back using two 200GbE QSFP56 cables, like this picture, we use **`host1` `bf1` `host2` `bf2`** refer as following ![machine status](./image/machine.png). We run application and kernel module on host and run smartns_dpu(core program) on BlueField-3 Arm processor.
+We provide two machines for AE reviewers. Each machine is equipped with an NVIDIA BlueField-3 B3220 400GbE NIC and connected back-to-back using two 200GbE QSFP56 cables. The topology is shown in the figure below. We use **`Host1` `BF1` `Host2` `BF2`** as labels in the deployment instructions.
 
+![machine status](./image/machine.png)
 
-**We already do all prerequisite in INSTALL.md**, reviewers can try final Step(Building all SmartNS software) directly.
+Applications and the kernel module run on hosts, while `smartns_dpu` (the core program) runs on the BlueField-3 Arm processors.
 
+**All prerequisites in `INSTALL.md` have already been completed** on our artifact machines. Reviewers can start directly from the final build step if needed.
 
-## 1. Connect to Artifact Machine
+## 1. Connect to artifact machines
 
-**Important: both USER and PASSPORT is: eurosys26**
+**Important:** both USER and PASSWORD are `eurosys26`.
 
-We already create a sudo user `eurosys26` on all machines, but disable password login for security reasons. You can use the following command to connect to the artifact machine.
+We have created a sudo user `eurosys26` on all machines and disabled password-based SSH login for security reasons. Use the following process to connect:
 
-1. Download private key `eurosys26_id_ed25519` from the submit website.
-2. Get the jump server domain name (use `jump` refer as following) from the submit website, we provide IPV4 server and IPV6 server(recommend).
+1. Download the private key `eurosys26_id_ed25519` from the submission website.
+2. Get the jump server domain name (referred to as `jump` below) from the submission website. We provide both IPv4 and IPv6 servers (IPv6 recommended).
 3. `ssh eurosys26@js.v4.rc4ml.org -p xxx -i eurosys26_id_ed25519`
-4. Enjoy for testing
+4. Start testing.
 5. If you have any questions, please contact us.
 
-You can find a NFS folder named `nfs`, this folder is located on host1 and shared with host2,bf1,bf2 under NFS, so you can clone SmartNS into this folder can try everything synchronous.
+You can find an NFS folder named `nfs`. It is located on `Host1` and shared with `Host2`, `BF1`, and `BF2`, so cloning SmartNS into this folder enables a synchronized workflow across machines.
 
-
-## 2. Load BASIC RDMA kernel module (Must check after each reboot)
+## 2. Load basic RDMA kernel modules (must check after each reboot)
 
 ~~~bash
-sudo insmod ./ib_core.ko 
+sudo insmod ./ib_core.ko
 sudo insmod ./ib_uverbs.ko
 sudo insmod ./mlxfw.ko
 sudo modprobe tls
@@ -34,16 +35,16 @@ sudo insmod ./mlx5_core.ko
 sudo insmod ./mlx5_ib.ko
 ~~~
 
+## 3. Verify link status (must check after each reboot)
 
-## 3. Make sure link is fine~ (Must check after each reboot)
-
-We need to make sure link aggregation works fine, please login to bf1 and bf2 and do following:
+To ensure link aggregation works correctly, log in to `BF1` and `BF2` and run:
 
 ~~~bash
 ifconfig | grep bond
 ~~~
 
-If you don't see any output like `bond0: flags=5187<UP,BROADCAST,RUNNING,MASTER,MULTICAST>`, please execute following commands on bf1 and bf2, this needs to be executed after each restart.
+If you do not see output similar to `bond0: flags=5187<UP,BROADCAST,RUNNING,MASTER,MULTICAST>`, execute the following commands on `BF1` and `BF2` (required after each reboot):
+
 ~~~bash
 sudo ip link add bond0 type bond
 sudo ip link set bond0 down
@@ -57,24 +58,26 @@ sudo ip link set p1 up
 sudo ip link set bond0 up
 ~~~
 
-After bond, you can use ping `10.0.0.100`, `10.0.0.101`, `10.0.0.200`, `10.0.0.201` to insure each link is correct!
+After bonding, verify connectivity with ping to `10.0.0.100`, `10.0.0.101`, `10.0.0.200`, and `10.0.0.201`.
 
+## 4. Set MTU to 9000 (must check after each reboot)
 
-## 4. Change Link MTU to 9000 (Must check after each reboot)
+Please set MTU to 9000 on all relevant interfaces.
 
-Please change every interface MTU to 9000
+On `Host1`:
 
-On host1
 ~~~bash
 sudo ifconfig enp137s0f0np0 mtu 9000 up
 ~~~
 
-On host2
+On `Host2`:
+
 ~~~bash
 sudo ifconfig enp7s0f0np0 mtu 9000 up
 ~~~
 
-On bf1 and bf2
+On `BF1` and `BF2`:
+
 ~~~bash
 sudo ifconfig bond0 mtu 9000 up
 sudo ifconfig p0 mtu 9000 up
@@ -84,71 +87,78 @@ sudo ifconfig pf0hpf mtu 9000 up
 sudo ifconfig en3f0pf0sf0 mtu 9000 up
 ~~~
 
-You can use `ping -s 8192 10.0.0.200` on host1 to check MTU setup correct!
+You can run `ping -s 8192 10.0.0.200` on `Host1` to verify MTU settings.
 
 ## 5. Build SmartNS
 
-SmartNS include three components: smartns_dpu(running on Arm processor), linux kernel module(running on Host) and uplayer applications(running on host and Arm). 
+SmartNS includes three components:
+
+- `smartns_dpu` (runs on Arm processors)
+- Linux kernel module (runs on hosts)
+- User-layer applications (run on both hosts and Arm)
 
 ~~~bash
 cd nfs
 git clone --recursive https://github.com/RC4ML/SmartNS
 cd SmartNS
 
-# exec on host
+# execute on host
 cd build_host
 cmake ..
 make -j # build test code and lib
 
 cd ../kernel
-make -j # build kerenl module
+make -j # build kernel module
 
-# exec on ARM (bf1 and bf2!)
-cd build_dpu
+# execute on ARM (BF1 and BF2)
+cd ../build_dpu
 cmake ..
 make -j # build smartns_dpu and test code
 ~~~
 
-
-
 ## 6. Deploy SmartNS
 
+To deploy SmartNS, run `smartns_dpu`, then load the Linux kernel module, and finally run user applications, **in this order**.
 
-To deploy SmartNS, we must run smartns_dpu, load linux kernel module and run user application **IN ORDER**
+### 6.1 Run `smartns_dpu` on Arm processors (`BF1` and `BF2`)
 
-### 6.1 Running smartns_dpu on Arm process(BF1 and BF2)
-On BF2 side
+On `BF2`:
+
 ~~~bash
 sudo ./smartns_dpu -deviceName mlx5_2 -is_server
 ~~~
 
-On BF1 side
+On `BF1`:
+
 ~~~bash
 sudo ./smartns_dpu -deviceName mlx5_2
 ~~~
 
+### 6.2 Load Linux kernel module (`Host1` and `Host2`)
 
-### 6.2 Load Linux kernel module(Host1 and Host2)
-On host1 and host2 side
+On `Host1` and `Host2`:
+
 ~~~bash
 cd kernel
 ./insmod.sh
 ~~~
 
-### 6.3 Running test(Host1 and Host2)
-On host2 (server)
+### 6.3 Run basic test (`Host1` and `Host2`)
+
+On `Host2` (server):
+
 ~~~bash
 ./write_bw -deviceName mlx5_0 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -is_server -iterations 1
 ~~~
 
-On host1 (client)
+On `Host1` (client):
+
 ~~~bash
 ./write_bw -deviceName mlx5_0 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -serverIp 10.0.0.200 -iterations 1
 ~~~
 
-Please note that server will never stop unless CTRL+C, so please manually use CTRL+C for server (host2).
+Please note that the server does not stop automatically. Use `CTRL+C` to stop the server on `Host2`.
 
-Please use `sudo rmmod smartns` to remove kernel module after client and server finish.
+Then use `sudo rmmod smartns` to remove the kernel module after client and server finish.
 
-Please use CTRL+C for smartns_dpu after remove smartns kernel module.
-
+Finally, use `CTRL+C` to stop `smartns_dpu` after removing the `smartns` kernel module.

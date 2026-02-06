@@ -5,22 +5,22 @@ A SmartNIC-centric network stack with software transport programmability and 400
 
 ## Required hardware and software
 
-- 2 x BlueField-3 SmartNIC with 400Gbps ethernet link
-- Required lib: cmake, gflags, numa, pthread
-- HugePage: At least 2048 huge pages on each NUMA node
+- 2 x BlueField-3 SmartNICs with a 400Gbps Ethernet link
+- Required libraries: cmake, gflags, numa, pthread
+- Huge pages: at least 2048 huge pages on each NUMA node
 - g++ >= 11.3.0
-- MLNX_OFED 
-- Intel Sapphire Rapids CPU or Emerald Rapids CPU with Data Streaming Accelerator(DSA) equipped (optimal)
+- MLNX_OFED
+- Intel Sapphire Rapids CPU or Emerald Rapids CPU with Data Streaming Accelerator (DSA) support (recommended)
 
 
 ## Install Dependencies and Build
-See [INSTALL.md](./doc/INSTALL.md) for install dependencies and build SmartNS on a BlueField-3 equipped machine.
+See [INSTALL.md](./doc/INSTALL.md) for dependency installation and build instructions on a BlueField-3-equipped machine.
 
 ## Connect and Deploy SmartNS
-See [DEPLOY.md](./doc/DEPLOY.md) for connecting to our artifact machine and  deploying SmartNS on BlueField-3.
+See [DEPLOY.md](./doc/DEPLOY.md) for connecting to the artifact machines and deploying SmartNS on BlueField-3.
 
 ## Run Test
-If Check if the configuration is correct in Run Experiments of [EXP.md](./doc/EXP.md) passes, then everything will be fine. Please refer to exp.md for more details.
+Run the verification steps in [EXP.md](./doc/EXP.md). If the checks in the "Evaluation" document pass, the environment is correctly configured.
 
 ## Directory Structure
 
@@ -35,9 +35,9 @@ If Check if the configuration is correct in Run Experiments of [EXP.md](./doc/EX
 │   ├── rdma_cm
 │   ├── rxe
 │   └── tcp_cm
-├── kernel (smartns kernel module code)
-├── lib (smartns lib for uplayer application)
-├── scripts (bf3 monitor python script)
+├── kernel (SmartNS kernel module code)
+├── lib (SmartNS library for upper-layer applications)
+├── scripts (BF3 monitoring Python scripts)
 ├── src
 │   ├── devx
 │   ├── dma
@@ -56,7 +56,7 @@ If Check if the configuration is correct in Run Experiments of [EXP.md](./doc/EX
 └── utils
 ~~~
 
-### ThirdParty
+## Third-Party Dependencies
 
 | project             | Version  |
 | ------------------- | -------  |
@@ -69,12 +69,11 @@ If Check if the configuration is correct in Run Experiments of [EXP.md](./doc/EX
 
 
 
-### Getting help
+## Getting help
 
-Working in the process...
+Documentation is being continuously improved.
 
 
-### Contact
+## Contact
 
-email at chenxuz@zju.edu.cn
-
+Email: chenxuz@zju.edu.cn
