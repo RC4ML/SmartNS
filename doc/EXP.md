@@ -20,6 +20,8 @@ ping -s 8192 10.0.0.200
 Use `perftest` to verify link bandwidth:
 
 ~~~bash
+# on Host1
+cd ~/nfs
 git clone https://github.com/linux-rdma/perftest
 cd perftest && ./autogen.sh && ./configure
 make -j

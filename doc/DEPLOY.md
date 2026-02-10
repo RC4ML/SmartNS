@@ -23,8 +23,10 @@ We have created a sudo user `eurosys26` on all machines and disabled password-ba
 You can find an NFS folder named `nfs`. It is located on `Host1` and shared with `Host2`, `BF1`, and `BF2`, so cloning SmartNS into this folder enables a synchronized workflow across machines.
 
 ## 2. Load basic RDMA kernel modules (must check after each reboot)
-
+Execute following commands on `Host1` and `Host2`:
 ~~~bash
+# we already prepare the necessary original kernel module on ~/nfs/original_module
+cd ~/nfs/original_module
 sudo insmod ./ib_core.ko
 sudo insmod ./ib_uverbs.ko
 sudo insmod ./mlxfw.ko
