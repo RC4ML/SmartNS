@@ -91,6 +91,10 @@ sudo ifconfig en3f0pf0sf0 mtu 9000 up
 
 You can run `ping -s 8192 10.0.0.200` on `Host1` to verify MTU settings.
 
+## 4.5 Use all in one scripts
+
+We provide a `all-in-one` scripts in scripts folders, you can directly run like `bash ./scripts/deploy_host1.sh` on **Host1** and `bash ./scripts/deploy_bf1.sh` on **BF1**.
+
 ## 5. Build SmartNS
 
 SmartNS includes three components:
@@ -105,6 +109,7 @@ git clone --recursive https://github.com/RC4ML/SmartNS
 cd SmartNS
 
 # execute on host
+mkdir build_host
 cd build_host
 cmake ..
 make -j # build test code and lib
@@ -112,8 +117,9 @@ make -j # build test code and lib
 cd ../kernel
 make -j # build kernel module
 
-# execute on ARM (BF1 and BF2)
-cd ../build_dpu
+# execute on ARM! (BF1 and BF2)
+mkdir build_dpu
+cd build_dpu
 cmake ..
 make -j # build smartns_dpu and test code
 ~~~
