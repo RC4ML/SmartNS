@@ -8,10 +8,6 @@ if [ ! -d "$WORK_DIR" ]; then
     exit 1
 fi
 
-if ! ip link show "$IFACE" > /dev/null 2>&1; then
-    echo "Error: Network interface '$IFACE' does not exist."
-    exit 1
-fi
 
 pushd "$WORK_DIR" > /dev/null
 
@@ -25,6 +21,11 @@ sudo modprobe pci-hyperv-intf
 sudo modprobe psample
 sudo insmod ./mlx5_core.ko
 sudo insmod ./mlx5_ib.ko
+
+if ! ip link show "$IFACE" > /dev/null 2>&1; then
+    echo "Error: Network interface '$IFACE' does not exist."
+    exit 1
+fi
 
 echo "Configuring interface $IFACE..."
 sudo ifconfig "$IFACE" mtu 9000 up
