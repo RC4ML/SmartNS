@@ -29,8 +29,6 @@ sudo insmod ./mlx5_ib.ko
 echo "Configuring interface $IFACE..."
 sudo ifconfig "$IFACE" mtu 9000 up
 
-# 4. 返回原来的目录
-# popd 返回 pushd 之前的目录
 popd > /dev/null
 
 echo "Done."
