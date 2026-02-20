@@ -40,3 +40,5 @@
 .vscode/
 .idea/
 **/core.*
+/test/results
+**/*.pyc

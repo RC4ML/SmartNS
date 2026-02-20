@@ -39,7 +39,7 @@ std::vector<std::vector<uint64_t>>dsa_submit_tsc;
 constexpr size_t dsa_submit_cost_ns = 100;
 constexpr size_t dsa_finish_cost_ns = 4000;
 
-inline uint32_t do_solar_handler(size_t thread_id, void *buf, size_t pkt_size, void *dst_buf, size_t &recv_counter, offset_handler &recv_comp) {
+inline uint32_t do_solar_handler(size_t thread_id, void *buf, size_t pkt_size, void *dst_buf, size_t recv_counter, offset_handler &recv_comp) {
     if (FLAGS_type == TestType::CPU) {
         uint32_t crc = crc32_fast(buf, pkt_size);
         memcpy(dst_buf, buf, pkt_size);
@@ -59,14 +59,19 @@ inline uint32_t do_solar_handler(size_t thread_id, void *buf, size_t pkt_size, v
     return 0;
 }
 
-inline void do_solar_extra_handler(size_t thread_id, size_t &recv_counter, offset_handler &recv_comp) {
+inline void do_solar_extra_handler(size_t thread_id, size_t recv_counter, offset_handler &recv_comp) {
     if (FLAGS_type == TestType::CPU) {
         return;
     } else if (FLAGS_type == TestType::CPU_CRCOffload) {
         return;
     } else if (FLAGS_type == TestType::CPU_CRCOffload_DSA) {
-        size_t now_tsc = get_tsc();
-        while (recv_comp.index() < recv_counter && now_tsc - dsa_submit_tsc[thread_id][recv_comp.index() % OUTSTANDING] > dsa_finish_cost_ns * get_tsc_freq_per_ns()) {
+        const uint64_t finish_delta_tsc = dsa_finish_cost_ns * get_tsc_freq_per_ns();
+        while (recv_comp.index() < recv_counter) {
+            const uint64_t now_tsc = get_tsc();
+            const uint64_t submit_tsc = dsa_submit_tsc[thread_id][recv_comp.index() % OUTSTANDING];
+            if (now_tsc < submit_tsc || (now_tsc - submit_tsc) < finish_delta_tsc) {
+                break;
+            }
             recv_comp.step();
         }
         return;
@@ -141,10 +146,10 @@ void sub_task_server(int thread_index, qp_handler *handler, size_t ops) {
             }
 
             crc_sum += do_solar_handler(thread_index, reinterpret_cast<void *>(handler->buf + wc_recv[i].wr_id), FLAGS_payload_size, reinterpret_cast<void *>(reinterpret_cast<uint64_t>(copy_bufs) + wc_recv[i].wr_id), recv_counter, recv_comp);
+            recv_counter++;
             if (recv.index() < ops) {
                 post_recv(*handler, recv.offset(), FLAGS_payload_size);
                 recv.step();
-                recv_counter++;
             }
         }
 
@@ -251,6 +256,7 @@ void benchmark() {
     net_param.serverIp = FLAGS_serverIp;
     net_param.sock_port = FLAGS_port;
     socket_init(net_param);
+    total_bw.store(0);
 
     rdma_param rdma_param;
     rdma_param.device_name = FLAGS_deviceName;
@@ -300,7 +306,21 @@ void benchmark() {
     for (size_t i = 0;i < FLAGS_threads;i++) {
         threads[i].join();
     }
-    printf("Total Speed: %f Mops\n", total_bw.load());
+    double final_speed = total_bw.load();
+    printf("Total Speed: %f Mops\n", final_speed);
+    if (FLAGS_is_server) {
+        printf("RESULT|experiment=4|method=solar_bench|role=server|payload_size=%lu|threads=%lu|type=%u|total_gbps=%.6f\n",
+            static_cast<unsigned long>(FLAGS_payload_size),
+            static_cast<unsigned long>(FLAGS_threads),
+            FLAGS_type,
+            final_speed);
+    } else {
+        printf("RESULT|experiment=4|method=solar_bench|role=client|payload_size=%lu|threads=%lu|type=%u|total_mops=%.6f\n",
+            static_cast<unsigned long>(FLAGS_payload_size),
+            static_cast<unsigned long>(FLAGS_threads),
+            FLAGS_type,
+            final_speed);
+    }
     for (size_t i = 0;i < FLAGS_threads;i++) {
         free(qp_handlers[i]->send_sge_list);
         free(qp_handlers[i]->recv_sge_list);

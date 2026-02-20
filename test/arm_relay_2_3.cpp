@@ -12,11 +12,12 @@
 
 std::atomic<bool> stop_flag = false;
 std::mutex IO_LOCK;
+double total_throughput_gbps = 0.0;
 static uint64_t NB_RXD = 1024;
 static uint64_t NB_TXD = 1024;
 static uint64_t PKT_BUF_SIZE = 8448;
 static uint64_t PKT_HANDLE_BATCH = 2;
-static uint64_t PKT_SEND_OUTSTANDING = 32;
+static uint64_t PKT_SEND_OUTSTANDING = 16;
 
 static uint64_t BUF_SIZE = (NB_TXD + NB_RXD) * PKT_BUF_SIZE;
 
@@ -229,8 +230,11 @@ void sub_task_relay(size_t thread_index, qp_handler *handler_server, vhca_resour
 
     double duration = (end_time.tv_sec - begin_time.tv_sec) + (end_time.tv_nsec - begin_time.tv_nsec) / 1e9;
     double recv_speed = 8.0 * recv_comp.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
-    std::lock_guard<std::mutex> lock(IO_LOCK);
-    printf("thread [%ld], duration [%f]s, recv speed [%f] Gbps\n", thread_index, duration, recv_speed);
+    {
+        std::lock_guard<std::mutex> lock(IO_LOCK);
+        total_throughput_gbps += recv_speed;
+        printf("thread [%ld], duration [%f]s, recv speed [%f] Gbps\n", thread_index, duration, recv_speed);
+    }
 
     free(wc_recv);
 }
@@ -468,6 +472,10 @@ void benchmark() {
         socket_close(net_param);
     }
 
+    if (FLAGS_nodeType == RELAY) {
+        total_throughput_gbps = 0.0;
+    }
+
     std::vector<std::thread> threads(FLAGS_threads);
     for (size_t i = 0; i < FLAGS_threads; i++) {
         size_t now_index = i + FLAGS_coreOffset;
@@ -484,6 +492,13 @@ void benchmark() {
 
     for (size_t i = 0; i < FLAGS_threads; i++) {
         threads[i].join();
+    }
+
+    if (FLAGS_nodeType == RELAY) {
+        printf("RESULT|experiment=2|method=arm_relay_2_3|payload_size=%lu|threads=%lu|total_gbps=%.6f\n",
+            static_cast<unsigned long>(FLAGS_payload_size),
+            static_cast<unsigned long>(FLAGS_threads),
+            total_throughput_gbps);
     }
 
     delete[] qp_handlers_server;

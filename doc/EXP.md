@@ -8,6 +8,8 @@
 
 **Important:** Since this project involves Linux kernel modules, kernel freeze/hang/illegal access can occur. Please use `ipmitool` for power reset when needed, and then refer to [DEPLOY.md](./DEPLOY.md) to restore the environment after reboot.
 
+**Important:** Sometime the experiment result will significantly reduced, which is mainly becase of the unknown DMA engine question, please use `ipmitool` to restart the machine.
+
 ## 0. Ensure link status
 
 Use the following command on `Host1` to check reachability:
@@ -121,7 +123,7 @@ thread [1], duration [2.952497]s, recv speed [45.459082] Gbps
 thread [0], duration [2.994036]s, recv speed [44.828368] Gbps
 ~~~
 
-You can change `payload_size` from 1024 to 8192 to evaluate different payload sizes.
+You can change `payload_size` from 512 to 8192 to evaluate different payload sizes.
 
 After `BF2` finishes, you can stop applications on `Host2` and `BF1` with `CTRL+C` (these programs are hardcoded with spin loops).
 
@@ -245,3 +247,106 @@ You can change different `type` and `threads` settings for additional data point
 | CPU-only                  | 0    |
 | CPU+w/ CRC offload        | 1    |
 | CPU+w/ CRC offload+w/ DSA | 2    |
+
+## 5. Automation Quick Start (EXP1/EXP2/EXP4)
+
+This section provides ready-to-run commands for reviewers.
+All automation scripts are located in `test/automation/`.
+Default SSH settings in scripts: user `eurosys26`, key `/path/to/SmartNS/eurosys26_id_ed25519`, port `22`, and machine IPs `10.130.142.26/27/40/41` for `Host1/Host2/BF1/BF2`.
+Please note that id_ed25519 key need `chmod 600 eurosys26_id_ed25519` to set correct permission!
+
+### 5.1 Prerequisites
+
+Run the following from `Host1`:
+
+1. Ensure the environment in [DEPLOY.md](./DEPLOY.md) is ready (link/MTU/module checks).
+2. Ensure SSH can reach `10.130.142.27` (`Host2`), `10.130.142.40` (`BF1`), and `10.130.142.41` (`BF2`) from `Host1` (`10.130.142.26`) with the private key from submission.
+3. Ensure SmartNS is built on both Host and DPU sides:
+
+~~~bash
+cd ~/nfs/SmartNS
+
+# on host
+cd build_host
+cmake ..
+make -j
+
+# on Arm
+cd build_dpu
+cmake ..
+make -j
+~~~
+
+### 5.2 EXP1 automation + plotting
+
+`exp1_run_auto.py` automatically sweeps:
+- methods: `arm_relay_1_1`, `arm_relay_1_2`, `arm_relay_1_3`
+- `payload_size`: `64,128,256,512,1024,2048,4096,8192`
+
+~~~bash
+cd ~/nfs/SmartNS
+python3 ./test/automation/exp1_run_auto.py
+~~~
+
+If your key is stored in a different path, add `--ssh-key /path/to/key`.
+
+~~~bash
+cd ~/nfs/SmartNS
+python3 ./test/automation/exp1_plot.py \
+  --input test/results/exp1_results.csv \
+  --output test/results/exp1_figure.svg
+~~~
+
+### 5.3 EXP2 automation + plotting
+
+`exp2_run_auto.py` automatically sweeps:
+- methods: `arm_relay_2_1`, `arm_relay_2_2`, `arm_relay_2_3`
+- `payload_size`: `512,1024,2048,4096,8192`
+
+~~~bash
+cd ~/nfs/SmartNS
+python3 ./test/automation/exp2_run_auto.py
+~~~
+
+If your key is stored in a different path, add `--ssh-key /path/to/key`.
+
+~~~bash
+cd ~/nfs/SmartNS
+python3 ./test/automation/exp2_plot.py \
+  --input test/results/exp2_results.csv \
+  --output test/results/exp2_figure.svg
+~~~
+
+### 5.4 EXP4 automation + plotting
+
+`exp4_run_auto.py` automatically sweeps:
+- `threads`: `1..12`
+- `type`: `0,1,2`
+
+~~~bash
+cd ~/nfs/SmartNS
+python3 ./test/automation/exp4_run_auto.py
+~~~
+
+If your key is stored in a different path, add `--ssh-key /path/to/key`.
+
+~~~bash
+cd ~/nfs/SmartNS
+python3 ./test/automation/exp4_plot.py \
+  --input test/results/exp4_results.csv \
+  --output test/results/exp4_figure.svg
+~~~
+
+### 5.5 Output locations
+
+All scripts write outputs under `test/results/`:
+- CSV data files: `exp1_results.csv`, `exp2_results.csv`, `exp4_results.csv`
+- Run logs: `exp1_logs/`, `exp2_logs/`, `exp4_logs/`
+- Figures: `exp1_figure.svg`, `exp2_figure.svg`, `exp4_figure.svg`
+
+### 5.6 Auto-stop behavior
+
+To avoid hangs in multi-round automation:
+- The relay/client/server test binaries for EXP1 and EXP2 now accept `-auto_exit_sec` (default `0`, disabled).
+- Automation scripts set `-auto_exit_sec` for non-key roles, and send `SIGINT`/`SIGTERM`/`SIGKILL` automatically after the key role finishes.
+- This guarantees each round can proceed to the next payload size/thread configuration without manual `CTRL+C`.

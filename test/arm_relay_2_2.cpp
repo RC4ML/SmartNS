@@ -12,17 +12,19 @@
 
 std::atomic<bool> stop_flag = false;
 std::mutex IO_LOCK;
+double total_throughput_gbps = 0.0;
 static uint64_t NB_RXD = 2048;
 static uint64_t NB_TXD = 2048;
 static uint64_t PKT_BUF_SIZE = 8448;
 static uint64_t PKT_HANDLE_BATCH = 2;
-static uint64_t PKT_SEND_OUTSTANDING = 32;
+static uint64_t PKT_SEND_OUTSTANDING = 16;
 
 static uint64_t BUF_SIZE = (NB_TXD + NB_RXD) * PKT_BUF_SIZE;
 
 static uint64_t FLOW_UDP_DST_PORT = 6666;
 
 DEFINE_int32(nodeType, 100, "0: client, 1: relay, 2: server");
+DEFINE_uint64(auto_exit_sec, 0, "Force quit after timeout seconds (0: disabled)");
 enum NodeType {
     CLIENT = 0,
     RELAY = 1,
@@ -36,6 +38,14 @@ unsigned char CLIENT_MAC_ADDR[6] = { 0x02,0xc8,0x55,0x21,0x6d,0xfb };
 unsigned char SERVER_MAC_ADDR[6] = { 0x02,0xce,0xf7,0x33,0xe8,0x71 };
 
 void ctrl_c_handler(int) { stop_flag = true; }
+
+inline bool should_auto_exit(uint64_t begin_tsc) {
+    if (FLAGS_auto_exit_sec == 0) {
+        return false;
+    }
+    double elapsed_sec = static_cast<double>(get_tsc() - begin_tsc) / (get_tsc_freq_per_ns() * 1e9);
+    return elapsed_sec >= static_cast<double>(FLAGS_auto_exit_sec);
+}
 
 void init_raw_packet_handler(qp_handler *handler, size_t thread_index) {
     size_t local_mr_addr = reinterpret_cast<size_t>(handler->buf);
@@ -154,7 +164,8 @@ void sub_task_relay(size_t thread_index, qp_handler *handler_server, vhca_resour
     begin_time.tv_sec = 0;
 
     int done = 0;
-    while (!stop_flag && !done) {
+    uint64_t loop_begin_tsc = get_tsc();
+    while (!stop_flag && !done && !should_auto_exit(loop_begin_tsc)) {
         if ((recv.index() - recv_comp.index()) < (rx_depth - PKT_HANDLE_BATCH)) {
             for (size_t i = 0;i < PKT_HANDLE_BATCH;i++) {
                 handler_server->recv_sge_list[i].addr = recv.offset() + local_mr_addr;
@@ -205,8 +216,11 @@ void sub_task_relay(size_t thread_index, qp_handler *handler_server, vhca_resour
 
     double duration = (end_time.tv_sec - begin_time.tv_sec) + (end_time.tv_nsec - begin_time.tv_nsec) / 1e9;
     double recv_speed = 8.0 * recv_comp.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
-    std::lock_guard<std::mutex> lock(IO_LOCK);
-    printf("thread [%ld], duration [%f]s, recv speed [%f] Gbps\n", thread_index, duration, recv_speed);
+    {
+        std::lock_guard<std::mutex> lock(IO_LOCK);
+        total_throughput_gbps += recv_speed;
+        printf("thread [%ld], duration [%f]s, recv speed [%f] Gbps\n", thread_index, duration, recv_speed);
+    }
 
     free(wc_recv);
 }
@@ -230,7 +244,8 @@ void sub_task_client(size_t thread_index, qp_handler *qp_handler) {
 
     struct timespec begin_time, end_time;
     clock_gettime(CLOCK_MONOTONIC, &begin_time);
-    while (!stop_flag) {
+    uint64_t loop_begin_tsc = get_tsc();
+    while (!stop_flag && !should_auto_exit(loop_begin_tsc)) {
         ne_send_client = poll_send_cq(*qp_handler, wc_send);
         for (size_t i = 0; i < ne_send_client; i++) {
             assert(wc_send[i].status == IBV_WC_SUCCESS);
@@ -269,7 +284,8 @@ void sub_task_client(size_t thread_index, qp_handler *qp_handler) {
 void sub_task_server(size_t thread_index, vhca_resource *resource) {
     wait_scheduling(FLAGS_numaNode, thread_index);
 
-    while (!stop_flag) {
+    uint64_t loop_begin_tsc = get_tsc();
+    while (!stop_flag && !should_auto_exit(loop_begin_tsc)) {
         sleep(1);
     }
 }
@@ -450,6 +466,10 @@ void benchmark() {
         socket_close(net_param);
     }
 
+    if (FLAGS_nodeType == RELAY) {
+        total_throughput_gbps = 0.0;
+    }
+
     std::vector<std::thread> threads(FLAGS_threads);
     for (size_t i = 0; i < FLAGS_threads; i++) {
         size_t now_index = i + FLAGS_coreOffset;
@@ -466,6 +486,13 @@ void benchmark() {
 
     for (size_t i = 0; i < FLAGS_threads; i++) {
         threads[i].join();
+    }
+
+    if (FLAGS_nodeType == RELAY) {
+        printf("RESULT|experiment=2|method=arm_relay_2_2|payload_size=%lu|threads=%lu|total_gbps=%.6f\n",
+            static_cast<unsigned long>(FLAGS_payload_size),
+            static_cast<unsigned long>(FLAGS_threads),
+            total_throughput_gbps);
     }
 
     delete[] qp_handlers_server;
