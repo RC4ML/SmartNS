@@ -252,7 +252,7 @@ You can change different `type` and `threads` settings for additional data point
 
 This section provides ready-to-run commands for reviewers.
 All automation scripts are located in `test/automation/`.
-Default SSH settings in scripts: user `eurosys26`, key `/path/to/SmartNS/eurosys26_id_ed25519`, port `22`, and machine IPs `10.130.142.26/27/40/41` for `Host1/Host2/BF1/BF2`.
+Default SSH settings in scripts: user `eurosys26`, key `/path/to/SmartNS/eurosys26_id_ed25519`, port `22`.
 Please note that id_ed25519 key need `chmod 600 eurosys26_id_ed25519` to set correct permission!
 
 ### 5.1 Prerequisites
