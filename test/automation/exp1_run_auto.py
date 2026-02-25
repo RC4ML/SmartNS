@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workdir", type=Path, default=default_root, help="SmartNS root path shared by all machines.")
     parser.add_argument("--output", type=Path, default=Path("test/results/exp1_results.csv"), help="CSV output path.")
     parser.add_argument("--log-dir", type=Path, default=Path("test/results/exp1_logs"), help="Directory for run logs.")
-    parser.add_argument("--payload-sizes", default="64,128,256,512,1024,2048,4096,8192")
+    parser.add_argument("--payload-sizes", default="128,256,512,1024,2048,4096,8192")
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--iterations", type=int, default=10000)
     parser.add_argument("--batch-size", type=int, default=1)
