@@ -25,9 +25,9 @@ from ae_automation_lib import (
 
 
 METHODS = [
+    ("rx_unlimited_working_set_in_cache", "Unlimited-working-set In-Cache RX"),
     ("rx_rdma_assisted", "RDMA-assisted RX"),
     ("rx_dma_assisted", "DMA-assisted RX"),
-    ("rx_unlimited_working_set_in_cache", "Unlimited-working-set In-Cache RX"),
 ]
 
 MEMORY_SAMPLE_REGEX = re.compile(
