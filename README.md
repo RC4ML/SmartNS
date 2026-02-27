@@ -78,3 +78,8 @@ Documentation is being continuously improved.
 ## Contact
 
 Email: chenxuz@zju.edu.cn
+
+## Cite
+~~~
+Working in the process...
+~~~
