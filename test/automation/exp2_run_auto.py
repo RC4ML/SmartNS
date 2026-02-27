@@ -37,12 +37,16 @@ MEMORY_SAMPLE_REGEX = re.compile(
 
 def parse_args() -> argparse.Namespace:
     default_root = Path(__file__).resolve().parent.parent.parent
-    parser = argparse.ArgumentParser(description="Run EXP2 automatically across payload sizes and methods.")
+    parser = argparse.ArgumentParser(description="Run EXP2 automatically across working-set sizes and methods.")
     parser.add_argument("--workdir", type=Path, default=default_root, help="SmartNS root path shared by all machines.")
     parser.add_argument("--output", type=Path, default=Path("test/results/exp2_results.csv"), help="CSV output path.")
     parser.add_argument("--log-dir", type=Path, default=Path("test/results/exp2_logs"), help="Directory for run logs.")
-    parser.add_argument("--payload-sizes", default="512,1024,2048,4096,8192")
-    parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument("--payload-size", type=int, default=8192)
+    parser.add_argument("--threads", type=int, default=12)
+    parser.add_argument("--nb-rxd-values", default="64,96,128,160,192,224,256,384,512")
+    parser.add_argument("--nb-txd-values", default="", help="Optional. Empty means using --nb-rxd-values for TXD.")
+    parser.add_argument("--pkt-buf-size", type=int, default=8192)
+    parser.add_argument("--pkt-handle-batch", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--outstanding", type=int, default=32)
@@ -156,7 +160,25 @@ def parse_memory_log(
 
 def main() -> int:
     args = parse_args()
-    payload_sizes = parse_int_list(args.payload_sizes)
+    nb_rxd_values = parse_int_list(args.nb_rxd_values)
+    if not nb_rxd_values:
+        raise ValueError("Empty NB_RXD list.")
+    if args.nb_txd_values.strip():
+        nb_txd_values = parse_int_list(args.nb_txd_values)
+        if not nb_txd_values:
+            raise ValueError("Empty NB_TXD list.")
+        if len(nb_txd_values) == 1 and len(nb_rxd_values) > 1:
+            nb_txd_values = nb_txd_values * len(nb_rxd_values)
+        if len(nb_txd_values) != len(nb_rxd_values):
+            raise ValueError("NB_RXD/NB_TXD list lengths must match (or provide a single NB_TXD value).")
+    else:
+        nb_txd_values = list(nb_rxd_values)
+
+    if args.payload_size > args.pkt_buf_size:
+        raise ValueError(f"payload_size ({args.payload_size}) must be <= pkt_buf_size ({args.pkt_buf_size}).")
+    if args.pkt_handle_batch < 1:
+        raise ValueError("pkt_handle_batch must be >= 1.")
+
     ssh_key = str(Path(args.ssh_key).expanduser())
 
     bf1 = Node(args.bf1, args.ssh_user, ssh_key, args.ssh_port, args.use_sudo)
@@ -175,6 +197,9 @@ def main() -> int:
                 "method",
                 "method_label",
                 "payload_size",
+                "nb_rxd",
+                "nb_txd",
+                "working_set_size",
                 "threads",
                 "total_gbps",
                 "memory_avg_read_mb",
@@ -195,9 +220,10 @@ def main() -> int:
         )
 
         for method, method_label in METHODS:
-            for payload_size in payload_sizes:
+            for nb_rxd, nb_txd in zip(nb_rxd_values, nb_txd_values):
                 port = args.port_base + run_index
-                run_tag = f"{method}_payload{payload_size}_run{run_index}"
+                working_set_size = nb_rxd * args.payload_size * args.threads
+                run_tag = f"{method}_nrxd{nb_rxd}_ntxd{nb_txd}_run{run_index}"
                 relay_log = args.log_dir / f"{run_tag}_bf2_relay.log"
                 server_log = args.log_dir / f"{run_tag}_host2_server.log"
                 client_log = args.log_dir / f"{run_tag}_bf1_client.log"
@@ -214,7 +240,15 @@ def main() -> int:
                     "-threads",
                     str(args.threads),
                     "-payload_size",
-                    str(payload_size),
+                    str(args.payload_size),
+                    "-nb_rxd",
+                    str(nb_rxd),
+                    "-nb_txd",
+                    str(nb_txd),
+                    "-pkt_buf_size",
+                    str(args.pkt_buf_size),
+                    "-pkt_handle_batch",
+                    str(args.pkt_handle_batch),
                     "-port",
                     str(port),
                 ]
@@ -236,7 +270,15 @@ def main() -> int:
                     "-threads",
                     str(args.threads),
                     "-payload_size",
-                    str(payload_size),
+                    str(args.payload_size),
+                    "-nb_rxd",
+                    str(nb_rxd),
+                    "-nb_txd",
+                    str(nb_txd),
+                    "-pkt_buf_size",
+                    str(args.pkt_buf_size),
+                    "-pkt_handle_batch",
+                    str(args.pkt_handle_batch),
                     "-port",
                     str(port),
                     "-nodeType",
@@ -253,7 +295,11 @@ def main() -> int:
                     str(args.non_key_auto_exit_sec),
                 ]
 
-                print(f"[EXP2] method={method} payload={payload_size} threads={args.threads} port={port}")
+                print(
+                    f"[EXP2] method={method} nb_rxd={nb_rxd} nb_txd={nb_txd} "
+                    f"payload={args.payload_size} threads={args.threads} "
+                    f"working_set={working_set_size}B port={port}"
+                )
                 relay_proc = None
                 server_proc = None
                 client_proc = None
@@ -351,7 +397,7 @@ def main() -> int:
                     memory_peak_total = f"{peak_total:.6f}"
                     memory_log_out = str(memory_log)
                     print(
-                        f"[EXP2] memory method={method} payload={payload_size} "
+                        f"[EXP2] memory method={method} nb_rxd={nb_rxd} nb_txd={nb_txd} "
                         f"active_avg_total={active_avg_total:.2f}MB/s "
                         f"active_samples={active_count}/{sample_count} "
                         f"threshold={active_threshold:.2f}MB/s peak={peak_total:.2f}MB/s"
@@ -362,7 +408,10 @@ def main() -> int:
                         datetime.now(timezone.utc).isoformat(),
                         method,
                         method_label,
-                        payload_size,
+                        args.payload_size,
+                        nb_rxd,
+                        nb_txd,
+                        working_set_size,
                         args.threads,
                         f"{total_gbps:.6f}",
                         memory_avg_read,
@@ -382,7 +431,10 @@ def main() -> int:
                     ]
                 )
                 csv_fp.flush()
-                print(f"[EXP2] done method={method} payload={payload_size} total_gbps={total_gbps:.3f}")
+                print(
+                    f"[EXP2] done method={method} nb_rxd={nb_rxd} nb_txd={nb_txd} "
+                    f"working_set={working_set_size}B total_gbps={total_gbps:.3f}"
+                )
 
     print(f"[EXP2] results saved to {args.output}")
     return 0

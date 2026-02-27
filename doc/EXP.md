@@ -146,7 +146,15 @@ Please note that application placement and launch order differ from EXP1.
 `exp2_run_auto.py` sweeps:
 
 - methods: `rx_rdma_assisted`, `rx_dma_assisted`, `rx_unlimited_working_set_in_cache`
-- `payload_size`: `512,1024,2048,4096,8192`
+- fixed parameters:
+  - `payload_size=8192`
+  - `pkt_buf_size=8192`
+  - `pkt_handle_batch=1`
+  - `threads=12`
+- `NB_RXD/NB_TXD`: `64,96,128,160,192,224,256,384,512`
+- working-set size formula:
+  - `working_set_size_bytes = NB_RXD * payload_size * threads`
+  - `working_set_size_mib = working_set_size_bytes / 1024 / 1024`
 
 ~~~bash
 cd ~/nfs/SmartNS
@@ -161,12 +169,13 @@ python3 ./test/automation/exp2_run_auto.py --ssh-key /path/to/key
 ~~~
 
 `exp2_run_auto.py` collects throughput and memory-bandwidth data into `test/results/exp2_results.csv`.
+The CSV includes `nb_rxd`, `nb_txd`, and `working_set_size` for plotting.
 It does not generate figures directly.
 
 Run `exp2_plot.py` once to generate both figures:
 
-- Figure 13.a style: payload size vs throughput (`test/results/exp2_figure_a.svg`)
-- Figure 13.b style: throughput vs Arm memory bandwidth (`test/results/exp2_figure_b.svg`)
+- Figure 13.a style: working-set size (MiB) vs throughput (`test/results/exp2_figure_a.svg`)
+- Figure 13.b style: working-set size (MiB) vs Arm memory bandwidth (`test/results/exp2_figure_b.svg`)
 
 ~~~bash
 cd ~/nfs/SmartNS
@@ -182,33 +191,33 @@ python3 ./test/automation/exp2_plot.py \
 First, on **BF2**, run:
 
 ~~~bash
-sudo ./rx_unlimited_working_set_in_cache -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 8 -payload_size 8192
+sudo ./rx_unlimited_working_set_in_cache -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 12 -payload_size 8192 -nb_rxd 64 -nb_txd 64 -pkt_buf_size 8192 -pkt_handle_batch 1
 ~~~
 
 Then, on **Host2**, run:
 
 ~~~bash
-sudo ./rx_unlimited_working_set_in_cache -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 2 -threads 8 -serverIp 10.0.0.201 -payload_size 8192
+sudo ./rx_unlimited_working_set_in_cache -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 2 -threads 12 -serverIp 10.0.0.201 -payload_size 8192 -nb_rxd 64 -nb_txd 64 -pkt_buf_size 8192 -pkt_handle_batch 1
 ~~~
 
 Finally, on **BF1**, run:
 
 ~~~bash
-sudo ./rx_unlimited_working_set_in_cache -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 0 -threads 8 -payload_size 8192
+sudo ./rx_unlimited_working_set_in_cache -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 0 -threads 12 -payload_size 8192 -nb_rxd 64 -nb_txd 64 -pkt_buf_size 8192 -pkt_handle_batch 1
 ~~~
 
-You will see output on `BF2` similar to the following. Sum all thread bandwidth as final result:
+You will see output on `BF2` similar to the following:
 
 ~~~bash
-thread [2], duration [2.632949]s, recv speed [50.976189] Gbps
-thread [3], duration [2.660956]s, recv speed [50.439698] Gbps
-thread [4], duration [2.939568]s, recv speed [45.659001] Gbps
-thread [6], duration [2.939651]s, recv speed [45.657707] Gbps
-thread [7], duration [2.951377]s, recv speed [45.476313] Gbps
-thread [5], duration [2.951522]s, recv speed [45.474098] Gbps
-thread [1], duration [2.952497]s, recv speed [45.459082] Gbps
 thread [0], duration [2.994036]s, recv speed [44.828368] Gbps
+thread [1], duration [2.952497]s, recv speed [45.459082] Gbps
+...
+RESULT|experiment=2|method=rx_unlimited_working_set_in_cache|payload_size=8192|threads=12|total_gbps=540.123456
 ~~~
+
+For manual sweep, keep all other parameters fixed and iterate:
+
+- `NB_RXD/NB_TXD = 64,96,128,160,192,224,256,384,512`
 
 #### 2.2.2 RDMA-assisted RX (`rx_rdma_assisted`)
 

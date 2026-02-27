@@ -1,6 +1,6 @@
-// Client: sudo ./rx_rdma_assisted -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 0 -payload_size 2048 -threads 1
-// Relay:  sudo ./rx_rdma_assisted -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -payload_size 2048 -threads 1
-// Server: sudo ./rx_rdma_assisted -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 2 -payload_size 2048 -threads 1  -serverIp 10.0.0.201
+// Client: sudo ./rx_rdma_assisted -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 0 -payload_size 8192 -threads 12 -nb_rxd 64 -nb_txd 64 -pkt_buf_size 8192 -pkt_handle_batch 1
+// Relay:  sudo ./rx_rdma_assisted -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -payload_size 8192 -threads 12 -nb_rxd 64 -nb_txd 64 -pkt_buf_size 8192 -pkt_handle_batch 1
+// Server: sudo ./rx_rdma_assisted -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 2 -payload_size 8192 -threads 12 -serverIp 10.0.0.201 -nb_rxd 64 -nb_txd 64 -pkt_buf_size 8192 -pkt_handle_batch 1
 #include "smartns_dv.h"
 #include "rdma_cm/libsmartns.h"
 #include "tcp_cm/tcp_cm.h"
@@ -12,10 +12,10 @@
 std::atomic<bool> stop_flag = false;
 std::mutex IO_LOCK;
 double total_throughput_gbps = 0.0;
-static uint64_t NB_RXD = 2048;
-static uint64_t NB_TXD = 2048;
-static uint64_t PKT_BUF_SIZE = 8448;
-static uint64_t PKT_HANDLE_BATCH = 2;
+static uint64_t NB_RXD = 64;
+static uint64_t NB_TXD = 64;
+static uint64_t PKT_BUF_SIZE = 8192;
+static uint64_t PKT_HANDLE_BATCH = 1;
 static uint64_t PKT_SEND_OUTSTANDING = 16;
 
 static uint64_t BUF_SIZE = (NB_TXD + NB_RXD) * PKT_BUF_SIZE;
@@ -24,6 +24,10 @@ static uint64_t FLOW_UDP_DST_PORT = 6666;
 
 DEFINE_int32(nodeType, 100, "0: client, 1: relay, 2: server");
 DEFINE_uint64(auto_exit_sec, 0, "Force quit after timeout seconds (0: disabled)");
+DEFINE_uint64(nb_rxd, 64, "Number of RX descriptors");
+DEFINE_uint64(nb_txd, 64, "Number of TX descriptors");
+DEFINE_uint64(pkt_buf_size, 8192, "Packet buffer size in bytes");
+DEFINE_uint64(pkt_handle_batch, 1, "Packet handle batch size");
 enum NodeType {
     CLIENT = 0,
     RELAY = 1,
@@ -44,6 +48,14 @@ inline bool should_auto_exit(uint64_t begin_tsc) {
     }
     double elapsed_sec = static_cast<double>(get_tsc() - begin_tsc) / (get_tsc_freq_per_ns() * 1e9);
     return elapsed_sec >= static_cast<double>(FLAGS_auto_exit_sec);
+}
+
+static void apply_runtime_params() {
+    NB_RXD = FLAGS_nb_rxd;
+    NB_TXD = FLAGS_nb_txd;
+    PKT_BUF_SIZE = FLAGS_pkt_buf_size;
+    PKT_HANDLE_BATCH = FLAGS_pkt_handle_batch;
+    BUF_SIZE = (NB_TXD + NB_RXD) * PKT_BUF_SIZE;
 }
 
 void init_raw_packet_handler(qp_handler *handler, size_t thread_index) {
@@ -398,6 +410,21 @@ int main(int argc, char *argv[]) {
     if (FLAGS_nodeType < 0 && FLAGS_nodeType > 2) {
         throw std::runtime_error("Invalid nodeType");
     }
+
+    if (FLAGS_nb_rxd == 0 || FLAGS_nb_txd == 0) {
+        throw std::runtime_error("Invalid descriptor depth");
+    }
+    if (FLAGS_pkt_buf_size < 64) {
+        throw std::runtime_error("Invalid pkt_buf_size");
+    }
+    if (FLAGS_pkt_handle_batch == 0) {
+        throw std::runtime_error("Invalid pkt_handle_batch");
+    }
+    if (FLAGS_pkt_handle_batch > FLAGS_nb_rxd || FLAGS_pkt_handle_batch > FLAGS_nb_txd) {
+        throw std::runtime_error("pkt_handle_batch must be <= nb_rxd and nb_txd");
+    }
+
+    apply_runtime_params();
 
     if (FLAGS_payload_size < 64 || static_cast<uint32_t>(FLAGS_payload_size) > PKT_BUF_SIZE) {
         throw std::runtime_error("Invalid payload_size");
