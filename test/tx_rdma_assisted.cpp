@@ -1,6 +1,6 @@
-// Client: sudo ./arm_relay_1_1 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 2 -payload_size 1024 -serverIp 10.0.0.101
-// Relay:  sudo ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 2 -payload_size 1024
-// Server: sudo ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 2 -payload_size 1024
+// Client: sudo ./tx_rdma_assisted -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 2 -payload_size 1024 -serverIp 10.0.0.101
+// Relay:  sudo ./tx_rdma_assisted -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 2 -payload_size 1024
+// Server: sudo ./tx_rdma_assisted -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 2 -payload_size 1024
 
 #include "smartns_dv.h"
 #include "rdma_cm/libsmartns.h"
@@ -405,7 +405,7 @@ void benchmark() {
     }
 
     if (FLAGS_nodeType == RELAY) {
-        printf("RESULT|experiment=1|method=arm_relay_1_1|payload_size=%lu|threads=%lu|total_gbps=%.6f\n",
+        printf("RESULT|experiment=1|method=tx_rdma_assisted|payload_size=%lu|threads=%lu|total_gbps=%.6f\n",
             static_cast<unsigned long>(FLAGS_payload_size),
             static_cast<unsigned long>(FLAGS_threads),
             total_throughput_gbps);

@@ -1,6 +1,6 @@
-// Client: ./arm_relay_1_1 -deviceName mlx5_0 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -serverIp 10.0.0.101
-// Relay:  ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -is_server -serverIp 10.0.0.201
-// Server: ./arm_relay_1_1 -deviceName mlx5_2 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -is_server
+// Client: ./tx_rdma_assisted -deviceName mlx5_0 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -serverIp 10.0.0.101
+// Relay:  ./tx_rdma_assisted -deviceName mlx5_2 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -is_server -serverIp 10.0.0.201
+// Server: ./tx_rdma_assisted -deviceName mlx5_2 -batch_size 1 -threads 1 -outstanding 32 -payload_size 1024 -is_server
 
 #include "smartns_dv.h"
 #include "rdma_cm/libsmartns.h"

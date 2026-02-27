@@ -1,6 +1,6 @@
-// Client: sudo ./arm_relay_1_3 -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 2 -payload_size 1024 -serverIp 10.0.0.101
-// Relay:  sudo ./arm_relay_1_3 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 2 -payload_size 1024
-// Server: sudo ./arm_relay_1_3 -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 2 -payload_size 1024
+// Client: sudo ./tx_dma_assisted -deviceName mlx5_0 -batch_size 1 -outstanding 32 -nodeType 0 -threads 2 -payload_size 1024 -serverIp 10.0.0.101
+// Relay:  sudo ./tx_dma_assisted -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 1 -threads 2 -payload_size 1024
+// Server: sudo ./tx_dma_assisted -deviceName mlx5_2 -batch_size 1 -outstanding 32 -nodeType 2 -threads 2 -payload_size 1024
 
 #include "smartns_dv.h"
 #include "rdma_cm/libsmartns.h"
@@ -14,8 +14,8 @@
 std::atomic<bool> stop_flag = false;
 std::mutex IO_LOCK;
 double total_throughput_gbps = 0.0;
-static uint64_t NB_RXD = 1024;
-static uint64_t NB_TXD = 1024;
+static uint64_t NB_RXD = 2048;
+static uint64_t NB_TXD = 2048;
 static uint64_t PKT_BUF_SIZE = 8448;
 static uint64_t PKT_HANDLE_BATCH = 2;
 static uint64_t PKT_SEND_OUTSTANDING = 128;
@@ -55,9 +55,9 @@ void init_raw_packet_handler(qp_handler *handler, size_t thread_index) {
     size_t tx_depth = handler->tx_depth;
 
     for (int i = 0;i < handler->num_wrs;i++) {
-        handler->send_sge_list[i * handler->num_sges_per_wr].lkey = local_rkey;
-        handler->send_wr[i].sg_list = handler->send_sge_list + i * handler->num_sges_per_wr;
-        handler->send_wr[i].num_sge = handler->num_sges_per_wr;
+        handler->send_sge_list[i].lkey = local_rkey;
+        handler->send_wr[i].sg_list = handler->send_sge_list + i;
+        handler->send_wr[i].num_sge = 1;
         if (i != 0) {
             handler->send_wr[i - 1].next = handler->send_wr + i;
         }
@@ -105,10 +105,13 @@ void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *res
     struct ibv_wc *wc_send = NULL;
     ALLOCATE(wc_send, struct ibv_wc, CTX_POLL_BATCH);
 
+    offset_handler send_client(NB_TXD, PKT_BUF_SIZE, 64);
+    offset_handler send_client_comp(NB_TXD, PKT_BUF_SIZE, 64);
     offset_handler send_server(NB_TXD, PKT_BUF_SIZE, 0);
     offset_handler send_server_comp(NB_TXD, PKT_BUF_SIZE, 0);
 
 
+    size_t tx_depth = FLAGS_outstanding;
     size_t ops = FLAGS_iterations * (BUF_SIZE) / PKT_BUF_SIZE;
     ops = round_up(ops, FLAGS_batch_size);
     ops = round_up(ops, SEND_CQ_BATCH);
@@ -120,13 +123,35 @@ void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *res
     void *local_buffer = bufs[thread_index];
     assert(local_buffer != nullptr);
 
+    // CQ
+    ibv_cq *sq_cq = create_dma_cq(resource->pd->context, tx_depth);
+    // QP
+    ibv_qp *qp = create_dma_qp(resource->pd->context, resource->pd, sq_cq, sq_cq, FLAGS_outstanding * 2);
+    init_dma_qp(qp);
+    dma_qp_self_connected(qp);
+    ibv_qp_ex *dma_qpx = ibv_qp_to_qp_ex(qp);
+    mlx5dv_qp_ex *dma_mqpx = mlx5dv_qp_ex_from_ibv_qp_ex(dma_qpx);
+    dma_mqpx->wr_memcpy_direct_init(dma_mqpx);
+    // mkey
     uint32_t local_mr_mkey = handler->mr->lkey;
     uint32_t remote_mr_mkey = devx_mr_query_mkey(resource->mr);
 
+    /**
+     * DMA 发送
+     */
+    for (size_t i = 0; i < tx_depth; i++) {
+        dma_qpx->wr_id = send_client.index();
+        dma_qpx->wr_flags = IBV_SEND_SIGNALED;
+        // DMA Read
+        dma_mqpx->wr_memcpy_direct(dma_mqpx, local_mr_mkey, (uint64_t)local_buffer + send_client.offset(),
+            remote_mr_mkey, (uint64_t)resource->addr + send_client.offset(), FLAGS_payload_size - 64);
+        send_client.step(1);
+    }
 
     // number of completion
-    size_t ne_send_server;
+    size_t ne_send_client, ne_send_server;
 
+    size_t batch_size = FLAGS_batch_size;
     int done = 0;
     struct timespec begin_time, end_time;
     begin_time.tv_nsec = 0;
@@ -139,13 +164,20 @@ void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *res
     while (!done && !stop_flag && !should_auto_exit(loop_begin_tsc)) {
         // if (thread_index == 0) {
         //     size_t tsc_now = get_tsc();
-        //     size_t now_finished_ops = send_server_comp.index();
+        //     size_t now_finished_ops = send_client_comp.index();
         //     if (tsc_now - tsc_prev > 5 * 1e7) {
         //         printf("%.2lf\n", 8.0 * (now_finished_ops - finished_ops) * FLAGS_threads * FLAGS_payload_size * get_tsc_freq_per_ns() / (tsc_now - tsc_prev));
         //         tsc_prev = tsc_now;
         //         finished_ops = now_finished_ops;
         //     }
         // }
+        // DMA 轮询
+        ne_send_client = ibv_poll_cq(sq_cq, CTX_POLL_BATCH, wc_send);
+        for (size_t i = 0; i < ne_send_client; i++) {
+            assert(wc_send[i].status == IBV_WC_SUCCESS);
+            // printf("Client: %6ld Poll CQ\n", send_comp_client.index());
+            send_client_comp.step(1);
+        }
 
         ne_send_server = poll_send_cq(*handler, wc_send);
         for (size_t i = 0; i < ne_send_server; i++) {
@@ -154,15 +186,22 @@ void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *res
             send_server_comp.step(PKT_HANDLE_BATCH);
         }
 
-        if (send_server.index() < ops && send_server.index() - send_server_comp.index() <= PKT_SEND_OUTSTANDING - PKT_HANDLE_BATCH) {
-            for (size_t i = 0;i < PKT_HANDLE_BATCH;i++) {
-                handler->send_sge_list[i * handler->num_sges_per_wr].addr = send_server.offset() + reinterpret_cast<size_t>(handler->buf);
-                handler->send_sge_list[i * handler->num_sges_per_wr].length = 64;
-                handler->send_sge_list[i * handler->num_sges_per_wr].lkey = local_mr_mkey;
-                handler->send_sge_list[i * handler->num_sges_per_wr + 1].addr = send_server.offset() + reinterpret_cast<size_t>(resource->addr) + 64;
-                handler->send_sge_list[i * handler->num_sges_per_wr + 1].length = FLAGS_payload_size - 64;
-                handler->send_sge_list[i * handler->num_sges_per_wr + 1].lkey = remote_mr_mkey;
+        if (send_client.index() < ops && send_server.index() - send_server_comp.index() <= PKT_SEND_OUTSTANDING && send_client.index() - send_client_comp.index() <= tx_depth - FLAGS_batch_size) {
+            size_t now_send_num = std::min(ops - send_client.index(), batch_size);
+            for (size_t i = 0; i < now_send_num; i++) {
+                dma_qpx->wr_id = send_client.index();
+                dma_qpx->wr_flags = IBV_SEND_SIGNALED;
+                // DMA Read
+                dma_mqpx->wr_memcpy_direct(dma_mqpx, local_mr_mkey, (uint64_t)local_buffer + send_client.offset(),
+                    remote_mr_mkey, (uint64_t)resource->addr + send_client.offset(), FLAGS_payload_size - 64);
+                send_client.step(1);
+            }
+        }
 
+        if (send_client_comp.index() - send_server.index() >= PKT_HANDLE_BATCH) {
+            for (size_t i = 0;i < PKT_HANDLE_BATCH;i++) {
+                handler->send_sge_list[i].addr = send_server.offset() + reinterpret_cast<size_t>(handler->buf);
+                handler->send_sge_list[i].length = FLAGS_payload_size;
                 handler->send_wr[i].wr_id = send_server.index();
                 if (i == PKT_HANDLE_BATCH - 1) {
                     handler->send_wr[i].next = nullptr;
@@ -173,7 +212,7 @@ void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *res
             assert(ibv_post_send(handler->qp, handler->send_wr, &handler->send_bar_wr) == 0);
         }
 
-        if (send_server.index() >= ops) {
+        if (send_client_comp.index() >= ops) {
             done = 1;
         }
 
@@ -181,7 +220,7 @@ void sub_task_relay(size_t thread_index, qp_handler *handler, vhca_resource *res
     clock_gettime(CLOCK_MONOTONIC, &end_time);
 
     double duration = (end_time.tv_sec - begin_time.tv_sec) + (end_time.tv_nsec - begin_time.tv_nsec) / 1e9;
-    double speed = 8.0 * send_server.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
+    double speed = 8.0 * send_client.index() * FLAGS_payload_size / 1000 / 1000 / 1000 / duration;
 
     {
         std::lock_guard<std::mutex> lock(IO_LOCK);
@@ -431,7 +470,7 @@ void benchmark() {
     rdma_param.device_name = FLAGS_deviceName;
     rdma_param.numa_node = FLAGS_numaNode;
     rdma_param.batch_size = std::max(FLAGS_batch_size, PKT_HANDLE_BATCH);
-    rdma_param.sge_per_wr = 2;
+    rdma_param.sge_per_wr = 1;
     roce_init(rdma_param, FLAGS_threads);
 
     tcp_param net_param;
@@ -521,7 +560,7 @@ void benchmark() {
     }
 
     if (FLAGS_nodeType == RELAY) {
-        printf("RESULT|experiment=1|method=arm_relay_1_3|payload_size=%lu|threads=%lu|total_gbps=%.6f\n",
+        printf("RESULT|experiment=1|method=tx_dma_assisted|payload_size=%lu|threads=%lu|total_gbps=%.6f\n",
             static_cast<unsigned long>(FLAGS_payload_size),
             static_cast<unsigned long>(FLAGS_threads),
             total_throughput_gbps);

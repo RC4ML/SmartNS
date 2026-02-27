@@ -17,7 +17,8 @@ A SmartNIC-centric network stack with software transport programmability and 400
 See [INSTALL.md](./doc/INSTALL.md) for dependency installation and build instructions on a BlueField-3-equipped machine.
 
 ## Connect and Deploy SmartNS
-See [DEPLOY.md](./doc/DEPLOY.md) for connecting to the artifact machines and deploying SmartNS on BlueField-3.
+See [DEPLOY.md](./doc/DEPLOY.md) for host configuration, build, and deployment on BlueField-3.
+For AE-only temporary machine access (jump host/key details), see [APPENDIX.md](./doc/APPENDIX.md).
 
 ## Run Test
 Run the verification steps in [EXP.md](./doc/EXP.md). If the checks in the "Evaluation" document pass, the environment is correctly configured.
