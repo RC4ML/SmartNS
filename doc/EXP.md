@@ -57,6 +57,8 @@ For this experiment, you do **not** need to run `smartns_dpu` or load the kernel
 
 ### 1.1 Quick run (automation, recommended)
 
+Please store `eurosys26_id_ed25519` in SmartNS root directory (i.e., `~/nfs/SmartNS`) for convenience.
+
 `exp1_run_auto.py` sweeps:
 
 - methods: `tx_rdma_assisted`, `tx_dma_assisted`, `tx_header_only_offloading`
